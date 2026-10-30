@@ -1,5 +1,7 @@
 # Restore the standard Web Connection registration dependency
 
+> Superseded in part on 2026-10-30: on DSH >= 0.2.1-rc.2 the retained Web runtime service is `webStartup`, not `webRuntime`. See [DSH 0.2.1-rc.2 compatibility](2026-10-30-dsh-021-rc2-compatibility.md).
+
 ## Problem
 
 DSH commit `2ef85b1e17591fb9fadc78549726413c56f38dfa`, merged into master by `ba05b7d49de63106afdd7efcf741cca1985fae18`, removed `webServer` from Connection's provider dependencies. Generic `connection.rpc.handle()` still accesses that service through the provider context. The memory RPC child fails with `cannot get property "webServer" without inject`, while the parent plugin remains active. Unmatched POST requests then reach the static fallback and return HTTP 405.

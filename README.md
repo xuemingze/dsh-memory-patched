@@ -110,6 +110,16 @@ dsh plugin --profile web add @hr98w/dsh-memory
 
 插件已适配新版 DSH 的 Web RPC 与 Session persistence 接口；更新插件后也需重启 Web，不能只刷新页面。
 
+### 补丁分支安装（DSH ≥ 0.2.1-rc.2）
+
+本仓库是上游 `v0.1.4` 的补丁分支（`0.1.5`），内置两项 DSH 0.2.1-rc.2 兼容修复：整理 worker 使用可准入的 `plugin:dsh-memory` 源类型，Bundle 补丁改用 `webStartup` 依赖。背景见 [兼容性决策](docs/decisions/implemented/bug-fix/2026-10-30-dsh-021-rc2-compatibility.md)。
+
+```sh
+dsh plugin --profile desktop add "github:xuemingze/dsh-memory-patched#v0.1.5"
+```
+
+`lib/` 构建产物已随仓库提交，安装时无需在本地构建。安装后完全重启 DSH；若之前装过 npm 版，同一 profile 内先移除旧依赖再安装本分支。
+
 ### 从源码安装
 
 克隆仓库后，在仓库根目录执行：

@@ -66,7 +66,7 @@ async function fixture(): Promise<{
         seq: 0,
         data: {
           role: 'user',
-          source: { kind: 'plugin', plugin: 'dsh-memory' },
+          source: { kind: 'plugin:dsh-memory' },
           content: [{ type: 'text', text: renderConsolidationWorkerInput(input) }],
         },
       },

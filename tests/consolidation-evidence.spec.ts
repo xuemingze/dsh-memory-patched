@@ -16,7 +16,7 @@ describe('consolidation evidence projection', () => {
         type: 'user/message',
         surfaceOp: 'append',
         data: {
-          source: { kind: 'plugin', plugin: 'dsh-memory' },
+          source: { kind: 'plugin:dsh-memory' },
           content: [{ type: 'text', text: 'Previously injected memory must not be relearned.' }],
         },
       },

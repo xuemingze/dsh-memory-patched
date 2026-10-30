@@ -111,7 +111,7 @@ memory_update(change without revision)
 
 ## Browser 请求流程
 
-Bundle 对标准 `connection` row（同时匹配 id 与包名）设置 `inject: [webRuntime, webServer]`，保留其 Web 配置依赖，并修复 DSH Electron 合并后通用 RPC 注册缺少 `webServer` 依赖的问题。模块声明的 `credentials` 仍由 Loader 合并；不改认证或请求处理逻辑。Headless 没有该 row 时补丁警告并跳过，不创建 Connection。自定义 Connection row 的额外依赖需由后加载的用户 patch 保留，因为 Bundle patch 的 `inject` 字段是替换而非追加。背景与移除条件见 [兼容性决策](decisions/implemented/bug-fix/2026-09-10-connection-webserver-injection.md)。
+Bundle 对标准 `connection` row（同时匹配 id 与包名）设置 `inject: [webStartup, webServer]`，保留其 Web 配置依赖（DSH 0.2.1-rc.2 起该运行时服务名为 `webStartup`，旧名为 `webRuntime`），并修复 DSH Electron 合并后通用 RPC 注册缺少 `webServer` 依赖的问题。模块声明的 `credentials` 仍由 Loader 合并；不改认证或请求处理逻辑。Headless 没有该 row 时补丁警告并跳过，不创建 Connection。自定义 Connection row 的额外依赖需由后加载的用户 patch 保留，因为 Bundle patch 的 `inject` 字段是替换而非追加。背景与移除条件见 [兼容性决策](decisions/implemented/bug-fix/2026-09-10-connection-webserver-injection.md) 与 [DSH 0.2.1-rc.2 兼容修复](decisions/implemented/bug-fix/2026-10-30-dsh-021-rc2-compatibility.md)。
 
 ```text
 Memory Settings

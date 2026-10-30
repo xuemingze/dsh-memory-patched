@@ -34,7 +34,7 @@ assert(original, 'Standard Web Connection row must exist')
 const patched = applyEntryPatches([original], patches, warn)
 assert.equal(warnings.length, 0)
 assert.deepEqual(patched[0].config, original.config, 'Preserve authentication and runtime config')
-assert.deepEqual(patched[0].inject, ['webRuntime', 'webServer'])
+assert.deepEqual(patched[0].inject, ['webStartup', 'webServer'])
 
 warnings = []
 const headless = applyEntryPatches([], patches, warn)
@@ -56,6 +56,7 @@ try {
         await ctx.plugin({ apply(provider) {
           provider.provide('credentials', {})
           provider.provide('webRuntime', {})
+          provider.provide('webStartup', {})
           provider.provide('webServer', { register(route) {
             routes.set(route.path, route)
             return () => routes.delete(route.path)

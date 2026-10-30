@@ -10,7 +10,7 @@ declare module '@deepseek-ai/dsh-agent' {
 declare module '@deepseek-ai/dsh-llm' {
   export function createUserMessage(input: {
     content: Array<{ type: 'text'; text: string }>
-    source: { kind: 'plugin'; plugin: string }
+    source: { kind: string; plugin?: string }
   }): unknown
 }
 

@@ -79,7 +79,7 @@ function replayEvidence(events: readonly unknown[]): Record<string, unknown> {
     if (record?.type !== 'user/message') return []
     const data = eventRecord(record.data)
     const source = eventRecord(data?.source)
-    if (source?.kind !== 'plugin' || source.plugin !== 'dsh-memory' || !Array.isArray(data?.content)) return []
+    if (source?.kind !== 'plugin:dsh-memory' || !Array.isArray(data?.content)) return []
     const texts = data.content.flatMap((block) => {
       const content = eventRecord(block)
       return content?.type === 'text' && typeof content.text === 'string' ? [content.text] : []

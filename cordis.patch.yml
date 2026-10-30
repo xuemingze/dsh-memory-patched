@@ -1,9 +1,10 @@
 # dsh-memory contributes one Host plugin; its browser half is discovered through dsh.client.
 # Standard DSH Web Connection needs webServer for generic RPC registrations.
-# Preserve webRuntime used by its config; module-level dependencies still merge.
+# Preserve webStartup used by its config (the Web runtime service on DSH >= 0.2.1-rc.2);
+# module-level dependencies still merge. `inject` here replaces the row's list, not appends.
 - id: connection
   name: '@deepseek-ai/dsh-client-connection'
-  inject: [webRuntime, webServer]
+  inject: [webStartup, webServer]
 
 - insert:
     - id: dsh-memory

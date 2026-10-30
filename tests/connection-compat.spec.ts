@@ -23,9 +23,9 @@ class ConnectionFixture extends Service {
 }
 
 describe('Web Connection compatibility', () => {
-  it('targets only the standard Connection entry and preserves its Web runtime dependency', () => {
+  it('targets only the standard Connection entry and preserves its Web startup dependency', () => {
     expect(compatibility).toEqual({
-      id: 'connection', name: '@deepseek-ai/dsh-client-connection', inject: ['webRuntime', 'webServer'],
+      id: 'connection', name: '@deepseek-ai/dsh-client-connection', inject: ['webStartup', 'webServer'],
     })
   })
 
@@ -37,6 +37,7 @@ describe('Web Connection compatibility', () => {
       await ctx.plugin({ apply(provider: Context) {
         provider.provide('credentials', {})
         provider.provide('webRuntime', {})
+        provider.provide('webStartup', {})
         provider.provide('webServer', { register(channel: string) {
           routes.add(channel)
           return () => { routes.delete(channel) }

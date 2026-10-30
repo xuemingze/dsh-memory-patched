@@ -110,6 +110,16 @@ Restart `dsh web` completely after installation.
 
 The plugin adapts to the newer DSH Web RPC and Session persistence APIs. Restart Web after updating the plugin; refreshing the page alone is not enough.
 
+### Install the patch branch (DSH >= 0.2.1-rc.2)
+
+This repository is a patch branch of upstream `v0.1.4` (`0.1.5`) carrying two DSH 0.2.1-rc.2 compatibility fixes: consolidation worker messages use the admissible `plugin:dsh-memory` source kind, and the Bundle patch depends on `webStartup`. See the [compatibility decision](docs/decisions/implemented/bug-fix/2026-10-30-dsh-021-rc2-compatibility.md).
+
+```sh
+dsh plugin --profile desktop add "github:xuemingze/dsh-memory-patched#v0.1.5"
+```
+
+Built `lib/` artifacts are committed, so installation needs no local build. Restart DSH completely afterwards; remove an existing npm install from the same profile before switching.
+
 ### Install from source
 
 After cloning the repository, run these commands from its root:

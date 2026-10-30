@@ -306,11 +306,11 @@ export class SessionConsolidationWorker {
       operationSignal.throwIfAborted()
       handle.agent.inject(createUserMessage({
         content: [{ type: 'text', text: renderedInput }],
-        source: { kind: 'plugin', plugin: 'dsh-memory' },
+        source: { kind: 'plugin:dsh-memory' },
       }))
       handle.agent.followup(createUserMessage({
         content: [{ type: 'text', text: WORKER_TASK }],
-        source: { kind: 'plugin', plugin: 'dsh-memory' },
+        source: { kind: 'plugin:dsh-memory' },
       }))
       await handle.agent.whenIdle()
       operationSignal.throwIfAborted()
