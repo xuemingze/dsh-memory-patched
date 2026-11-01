@@ -12,7 +12,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['tests/**/*.spec.ts', 'benchmark/locomo/tests/**/*.test.mjs'],
+    include: ['tests/**/*.spec.{ts,tsx}', 'benchmark/locomo/tests/**/*.test.mjs'],
     environment: 'node',
   },
 })
