@@ -153,6 +153,30 @@ describe('MarkdownMemoryStore', () => {
     })
   })
 
+  it('reflects an in-place hand edit on the read after a cache hit', async () => {
+    const memory = store()
+    memory.initialize()
+    const scope = memory.scopeForCwd('/work/cache-invalidation')
+    const empty = await memory.readWorkspace(scope)
+    await memory.commitWorkspace({
+      scope,
+      expectedRevision: empty.revision,
+      changes: [{ action: 'put', record: {
+        name: 'cached-record',
+        description: 'Before the hand edit.',
+        type: 'project',
+        content: 'Original body.\n',
+      } }],
+    })
+    // Warm the stat cache, then edit the same file in place (mtime and size change).
+    expect((await memory.readWorkspace(scope)).records).toMatchObject([{ description: 'Before the hand edit.' }])
+    const path = join(scope.directory, 'cached-record.md')
+    writeFileSync(path, readFileSync(path, 'utf8').replace('Before the hand edit.', 'After the hand edit.'))
+    expect(await memory.readWorkspace(scope)).toMatchObject({
+      records: [{ name: 'cached-record', description: 'After the hand edit.' }],
+    })
+  })
+
   it('discovers Workspaces through opaque ids without exposing Host paths', async () => {
     const memory = store()
     memory.initialize()

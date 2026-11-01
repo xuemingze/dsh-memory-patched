@@ -1,6 +1,6 @@
 /** Settings section for Global Memory, Workspace Memory, Session Consolidation, and preferences. */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
   GlobalMemoryView,
   GlobalReplaceResponse,
@@ -228,6 +228,7 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
   const [error, setError] = useState<ErrorState>()
   const workspaceChanges = workspace === undefined ? [] : buildWorkspaceChanges(workspace.records, workspaceDrafts)
   const workspaceDirty = workspaceChanges.length > 0
+  const globalDirty = global !== undefined && draft !== global.content
   const draftIssue = workspaceDraftIssue(workspaceDrafts)
   const sessionWorkspaceGroups = groupSessionsByWorkspace(sessions?.sessions ?? [])
   const selectedSessionWorkspace = sessionWorkspaceGroups.find(group => group.key === selectedSessionWorkspaceKey)
@@ -238,6 +239,7 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
     || modelName !== modelCatalog.selection.model
     || debugEnabled !== modelCatalog.debugEnabled
   )
+  const tabRefreshController = useRef<AbortController | undefined>(undefined)
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     if (!props.loopback) return
@@ -399,9 +401,16 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
   const changeTab = (next: Tab): void => {
     setTab(next)
     setError(undefined)
-    if (next === 'workspaces' && tab !== 'workspaces' && workspaces.length === 0) void refreshWorkspaces()
-    if (next === 'sessions' && tab !== 'sessions' && sessions === undefined) void refreshSessions()
-    if (next === 'settings' && tab !== 'settings' && modelCatalog === undefined) void refreshModels()
+    // A tab-triggered refresh is owned by this switch: abort the previous one so
+    // an out-of-order response cannot overwrite the state (and drafts) of the
+    // tab the user just opened.
+    tabRefreshController.current?.abort()
+    const controller = new AbortController()
+    tabRefreshController.current = controller
+    const signal = controller.signal
+    if (next === 'workspaces' && workspaces.length === 0) void refreshWorkspaces(signal)
+    if (next === 'sessions' && sessions === undefined) void refreshSessions(signal)
+    if (next === 'settings' && modelCatalog === undefined) void refreshModels(signal)
   }
 
   const refreshVisible = async (): Promise<void> => {
@@ -478,7 +487,9 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
         <MemoryButton
           type="button"
           style={memorySectionStyles.button}
-          disabled={busy || workspaceBusy || sessionBusy || modelBusy || (tab === 'workspaces' && workspaceDirty)}
+          disabled={busy || workspaceBusy || sessionBusy || modelBusy
+            || (tab === 'workspaces' && workspaceDirty)
+            || (tab === 'global' && globalDirty)}
           onClick={() => { void refreshVisible() }}
         >
           {t('refresh')}
