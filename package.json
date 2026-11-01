@@ -1,6 +1,6 @@
 {
   "name": "@hr98w/dsh-memory",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Claude Code- and Codex-inspired long-term memory for DeepSeek Harness (patched fork for DSH >= 0.2.1-rc.2)",
   "repository": {
     "type": "git",

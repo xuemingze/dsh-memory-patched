@@ -154,10 +154,31 @@ export class SessionConsolidationRunner {
       if (attempt?.workerSessionId === undefined || attempt.workerSessionId === null) {
         throw new SessionConsolidationRunError('pending-recovery', 'committing receipt has no worker Session')
       }
-      const target = this.memory.workspaceTargetForKey(receipt.workspaceKey)
-      const workspace = await this.memory.readWorkspace(target)
-      const plan = await this.replay.loadRecoveryPlan(attempt.workerSessionId, receipt, workspace, signal)
-      return this.commits.recoverReceiptWithinReviewLock(receipt, target, plan)
+      try {
+        const target = this.memory.workspaceTargetForKey(receipt.workspaceKey)
+        const workspace = await this.memory.readWorkspace(target)
+        const plan = await this.replay.loadRecoveryPlan(attempt.workerSessionId, receipt, workspace, signal)
+        return await this.commits.recoverReceiptWithinReviewLock(receipt, target, plan)
+      } catch (error: unknown) {
+        if (signal?.aborted) throw error
+        const current = this.receipts.read(pending.reviewId)
+        if (current?.state !== 'committing') throw error
+        // The durable intent cannot be replayed (worker Session lost or drifted).
+        // Converge to a terminal state so the next run starts a fresh attempt
+        // instead of failing the same way on every retry.
+        this.debug?.failure({ reviewId: receipt.reviewId, attempt: attempt.attempt }, 'recovery-failed', error)
+        const attempts = receipt.attempts.map((entry, index) => index === receipt.attempts.length - 1
+          ? { ...entry, status: 'internal-error' as const }
+          : entry)
+        const converged: ConsolidationReceipt = {
+          ...receipt,
+          state: 'internal-error',
+          completedAt: this.receipts.timestamp(),
+          attempts,
+        }
+        this.receipts.write(converged)
+        return { outcome: 'internal-error', recovered: false, receipt: converged }
+      }
     })
   }
 }

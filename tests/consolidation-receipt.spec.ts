@@ -133,6 +133,31 @@ describe('ConsolidationCommitCoordinator', () => {
     expect(setupResult.receipts.read(result.receipt.reviewId)?.state).toBe('committed')
   })
 
+  it('resolves the recovery target from the receipt workspaceKey instead of the caller-presented scope', async () => {
+    const { coordinator, receipts, request, store } = await setup()
+    const commit = vi.spyOn(store, 'commitWorkspace')
+    commit.mockRejectedValueOnce(new Error('simulated process crash'))
+    await expect(coordinator.commit(request)).rejects.toThrow('simulated process crash')
+    expect(receipts.read(request.input.reviewId)?.state).toBe('committing')
+
+    // Two empty Workspaces share one revision, so a caller-presented scope of a
+    // different Workspace passes assertPlanMatchesReceipt; the durable receipt
+    // must own the target anyway.
+    const scopeB = store.scopeForCwd('/work/other-project')
+    const workspaceB = await store.readWorkspace(scopeB)
+    const swapped: ConsolidationCommitInput = {
+      ...request,
+      input: {
+        ...request.input,
+        workspace: { ...request.input.workspace, scope: scopeB, revision: workspaceB.revision },
+      },
+    }
+    await expect(coordinator.commit(swapped)).resolves.toMatchObject({ outcome: 'committed', recovered: true })
+    expect((await store.readWorkspace(request.input.workspace.scope)).records)
+      .toMatchObject([{ name: 'verification-rule' }])
+    expect((await store.readWorkspace(scopeB)).records).toEqual([])
+  })
+
   it('recovers when Global committed before a Workspace commit failure', async () => {
     const proposal = validProposal() as { outcome: string; changes: unknown[] }
     const setupResult = await setup({

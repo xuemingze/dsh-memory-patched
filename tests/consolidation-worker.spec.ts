@@ -96,6 +96,12 @@ class FakeWorkerHost {
     flush: async (session: unknown) => { this.flushes.push(session); return true },
   }
 
+  /** Resolve like `whenIdle` would, then reject: deterministic ordering for one failure test. */
+  async whenIdleThenReject(cause: Error): Promise<never> {
+    await this.pending
+    throw cause
+  }
+
   private async simulateRequest(): Promise<void> {
     const first = await this.preStep?.({ step: 1 }, async () => ({ kind: 'enter', messages: [] }))
     if (first?.kind === 'reject') return
@@ -354,6 +360,52 @@ describe('SessionConsolidationWorker', () => {
     ).run(input, 1)).rejects.toBeInstanceOf(ConsolidationEvidenceTooLargeError)
     expect(host.createOptions).toHaveLength(0)
     expect(host.modelRequests).toBe(0)
+  })
+
+  it('aborts through the race when the host never settles and still runs cleanup', async () => {
+    const { input, consolidator } = await inputAndConsolidator()
+    const host = new FakeWorkerHost({ kind: 'valid', proposal: validProposal })
+    const hangingAgents: ConsolidationWorkerAgents = {
+      create: async options => {
+        const handle = await host.agents.create(options)
+        return {
+          agent: { ...handle.agent, whenIdle: () => new Promise<void>(() => undefined) },
+          dispose: handle.dispose,
+        }
+      },
+    }
+    await expect(new SessionConsolidationWorker(
+      consolidator,
+      hangingAgents,
+      host.sessions,
+      { timeoutMs: 50 },
+    ).run(input, 1)).rejects.toMatchObject({ name: 'AbortError' })
+    expect(host.cancelled).toBe(1)
+    expect(host.flushes).toHaveLength(1)
+    expect(host.disposed).toBe(1)
+  })
+
+  it('normalizes a rejected whenIdle with an observed agent failure into a provider failure', async () => {
+    const { input, consolidator } = await inputAndConsolidator()
+    const host = new FakeWorkerHost({ kind: 'provider-failed', error: new Error('provider exploded') })
+    const rejectingAgents: ConsolidationWorkerAgents = {
+      create: async options => {
+        const handle = await host.agents.create(options)
+        return {
+          agent: {
+            ...handle.agent,
+            whenIdle: () => host.whenIdleThenReject(new Error('idle blew up')),
+          },
+          dispose: handle.dispose,
+        }
+      },
+    }
+    await expect(new SessionConsolidationWorker(
+      consolidator,
+      rejectingAgents,
+      host.sessions,
+    ).run(input, 1)).rejects.toBeInstanceOf(ConsolidationProviderError)
+    expect(host.disposed).toBe(1)
   })
 
   it('renders only review identity, evidence, Global content, and Workspace records as dynamic input', async () => {

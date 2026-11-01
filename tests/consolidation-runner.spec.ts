@@ -68,6 +68,7 @@ async function setup(events: readonly unknown[] = [
   commits: ConsolidationCommitCoordinator
   worker: FakeWorker
   runner: SessionConsolidationRunner
+  replay: ConsolidationPlanReplay
   setSourceRevision(value: string): void
 }> {
   const root = mkdtempSync(join(tmpdir(), 'dsh-memory-runner-'))
@@ -113,6 +114,7 @@ async function setup(events: readonly unknown[] = [
     commits,
     worker,
     runner: new SessionConsolidationRunner(consolidator, worker, receipts, commits, replay, store),
+    replay,
     setSourceRevision(value) { sourceRevision = value },
   }
 }
@@ -265,5 +267,35 @@ describe('SessionConsolidationRunner', () => {
       recovered: true,
     })
     expect(worker.calls).toBe(0)
+  })
+
+  it('converges an unreplayable committing receipt to a terminal state instead of looping forever', async () => {
+    const { runner, worker, commits, consolidator, receipts, store, replay } = await setup()
+    const input = await consolidator.prepare('source-session')
+    const plan = consolidator.planProposal(input, validProposal())
+    const original = store.commitWorkspace.bind(store)
+    store.commitWorkspace = async () => { throw new Error('simulated crash') }
+    await expect(commits.commit({
+      input,
+      plan,
+      attempt: 1,
+      workerSessionId: workerSessionIdOf(input.reviewId, 1),
+      workerConfig: worker.config,
+    })).rejects.toThrow('simulated crash')
+    store.commitWorkspace = original
+    expect(receipts.read(input.reviewId)?.state).toBe('committing')
+
+    replay.loadRecoveryPlan = async () => { throw new Error('worker session was lost') }
+    const failed = await runner.run('source-session')
+    expect(failed).toMatchObject({ outcome: 'internal-error', recovered: false })
+    expect(failed.receipt.attempts).toMatchObject([{ attempt: 1, status: 'internal-error' }])
+
+    const retried = await runner.run('source-session')
+    expect(retried).toMatchObject({ outcome: 'committed', recovered: false })
+    expect(retried.receipt.attempts).toMatchObject([
+      { attempt: 1, status: 'internal-error' },
+      { attempt: 2, status: 'committed' },
+    ])
+    expect(worker.calls).toBe(1)
   })
 })

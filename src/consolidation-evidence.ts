@@ -68,13 +68,31 @@ export function projectConsolidationEvidence(events: readonly unknown[]): Consol
   return turns
 }
 
+/** One model-facing text may not exceed this size; larger texts are truncated with a marker. */
+export const MAX_EVIDENCE_TEXT_BYTES = 16_384
+
 /** Text-only normalization that removes credentials and replaces very large fenced code blocks. */
 export function sanitizeConsolidationEvidenceText(value: string): string {
-  return redactCredentials(value).replace(/```[^\n]*\n[\s\S]*?```/gu, block => (
+  return capEvidenceText(redactCredentials(value).replace(/```[^\n]*\n[\s\S]*?```/gu, block => (
     Buffer.byteLength(block, 'utf8') > MAX_INLINE_CODE_BLOCK_BYTES
       ? `[omitted code block: ${Buffer.byteLength(block, 'utf8')} bytes]`
       : block
-  ))
+  )))
+}
+
+/**
+ * Cap one text so a single oversized turn cannot push the whole rendered input
+ * past `maxInputBytes`, which would fail every future attempt for this Session
+ * (the review id is deterministic). The sequence range is unaffected: the head
+ * of the text is kept and the dropped byte count is recorded inline.
+ */
+function capEvidenceText(text: string): string {
+  const total = Buffer.byteLength(text, 'utf8')
+  if (total <= MAX_EVIDENCE_TEXT_BYTES) return text
+  let cut = MAX_EVIDENCE_TEXT_BYTES
+  while (cut > 0 && Buffer.byteLength(text.slice(0, cut), 'utf8') > MAX_EVIDENCE_TEXT_BYTES) cut--
+  const kept = Buffer.byteLength(text.slice(0, cut), 'utf8')
+  return `${text.slice(0, cut)}\n[truncated ${total - kept} bytes]`
 }
 
 function effectiveSurfaceNodes(events: readonly Record<string, unknown>[]): Set<number> {

@@ -312,7 +312,7 @@ export class SessionConsolidationWorker {
         content: [{ type: 'text', text: WORKER_TASK }],
         source: { kind: 'plugin:dsh-memory' },
       }))
-      await handle.agent.whenIdle()
+      await this.awaitWorkerIdle(handle, operationSignal)
       operationSignal.throwIfAborted()
       if (agentFailure !== undefined) {
         throw new ConsolidationProviderError('consolidation Agent failed during its model turn', { cause: agentFailure })
@@ -331,6 +331,12 @@ export class SessionConsolidationWorker {
     } catch (error: unknown) {
       primaryFailure = error
       this.debug?.failure(debugIdentity, 'worker-failed', error)
+      // A rejected `whenIdle` bypasses the agent/error event path, so an Agent
+      // failure observed earlier must still be classified as a provider failure
+      // instead of falling through to internal-error.
+      if (agentFailure !== undefined && !(error instanceof ConsolidationProviderError)) {
+        throw new ConsolidationProviderError('consolidation Agent failed during its model turn', { cause: agentFailure })
+      }
       throw error
     } finally {
       operationSignal.removeEventListener('abort', abort)
@@ -368,6 +374,34 @@ export class SessionConsolidationWorker {
       if (primaryFailure === undefined && cleanupFailure !== undefined) throw cleanupFailure
     }
   }
+
+  /**
+   * Wait for the worker Agent to settle. The operation signal (caller abort or
+   * timeout) is raced against `whenIdle`, so a host that never settles cannot
+   * hang this method and keep the review lock and the cleanup chain from
+   * running. The losing side of the race must not surface as an unhandled
+   * rejection.
+   */
+  private async awaitWorkerIdle(handle: ConsolidationWorkerHandle, signal: AbortSignal): Promise<void> {
+    const idle = handle.agent.whenIdle()
+    idle.catch(() => undefined)
+    await new Promise<void>((resolveWait, rejectWait) => {
+      const onAbort = (): void => { rejectWait(abortError()) }
+      if (signal.aborted) {
+        onAbort()
+        return
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+      idle.then(
+        () => { signal.removeEventListener('abort', onAbort); resolveWait() },
+        (cause: unknown) => { signal.removeEventListener('abort', onAbort); rejectWait(cause) },
+      )
+    })
+  }
+}
+
+function abortError(): Error {
+  return new DOMException('consolidation worker wait was aborted', 'AbortError')
 }
 
 /** Render the exact dynamic evidence as one replayable user-role message. */

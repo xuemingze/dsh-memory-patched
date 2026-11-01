@@ -240,7 +240,11 @@ export class ConsolidationCommitCoordinator {
     }
     if (existing?.state === 'committing') {
       assertPlanMatchesReceipt(existing, request)
-      return this.recoverReceiptWithinReviewLock(existing, request.input.workspace.scope, request.plan)
+      // The recovery target is owned by the receipt, not by whatever scope the
+      // caller presents: two empty Workspaces share one revision, so trusting
+      // request.input.workspace.scope could commit the plan into the wrong
+      // Workspace directory.
+      return this.recoverReceiptWithinReviewLock(existing, this.memory.workspaceTargetForKey(existing.workspaceKey), request.plan)
     }
 
     await this.consolidator.assertSourceStable(request.input, request.signal)

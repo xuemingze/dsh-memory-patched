@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  MAX_EVIDENCE_TEXT_BYTES,
   MAX_INLINE_CODE_BLOCK_BYTES,
   projectConsolidationEvidence,
   sanitizeConsolidationEvidenceText,
@@ -135,5 +136,13 @@ describe('consolidation evidence projection', () => {
     expect(text).toContain('[REDACTED]')
     expect(text).not.toContain('MIIEowIBAAKCAQEA')
     expect(text).toContain('-----BEGIN PRIVATE KEY----- [REDACTED] -----END PRIVATE KEY-----')
+  })
+
+  it('truncates one oversized text instead of failing the whole input budget', () => {
+    const original = '很'.repeat(MAX_EVIDENCE_TEXT_BYTES * 2)
+    const text = sanitizeConsolidationEvidenceText(original)
+    expect(text).toContain('[truncated ')
+    expect(text.startsWith('很'.repeat(100))).toBe(true)
+    expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(MAX_EVIDENCE_TEXT_BYTES + 64)
   })
 })
