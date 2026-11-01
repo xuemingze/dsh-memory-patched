@@ -21,6 +21,14 @@ function makeApi(overrides: Partial<MemoryApi> = {}): MemoryApi {
   return {
     status: vi.fn(async () => statusView),
     readGlobal: vi.fn(async () => globalView),
+    replaceGlobal: vi.fn(async () => ({ status: 'committed', revision: 'sha256:global-2' })),
+    listWorkspaces: vi.fn(async () => ({ workspaces: [] })),
+    readWorkspace: vi.fn(async () => ({ workspaceId: `workspace:${'c'.repeat(64)}`, displayName: 'probe', revision: 'sha256:probe', recordCount: 0, index: '', records: [] })),
+    commitWorkspace: vi.fn(async () => ({ status: 'committed', revision: 'sha256:ws-2' })),
+    listSessions: vi.fn(async () => ({ available: false, sessions: [] })),
+    consolidateSession: vi.fn(async () => ({ status: 'no-change', recovered: false, reviewId: `review-${'d'.repeat(64)}`, attempt: 1, changeCount: 0, debugLoggingEnabled: false })),
+    readModels: vi.fn(async () => ({ available: false, selection: { provider: 'default', model: 'cheap' }, debugEnabled: false, revision: 'sha256:models', providers: [], failures: [] })),
+    selectModel: vi.fn(async () => ({ status: 'committed', revision: 'sha256:selected' })),
     ...overrides,
   } as unknown as MemoryApi
 }
@@ -64,5 +72,27 @@ describe('MemorySection rendering', () => {
     expect(refreshButton().hasAttribute('disabled')).toBe(false)
     fireEvent.change(editor, { target: { value: '# Global Memory\n\n- Hand edited.\n' } })
     expect(refreshButton().hasAttribute('disabled')).toBe(true)
+  })
+
+  it('surfaces a Global save conflict as a recoverable banner', async () => {
+    const api = makeApi({
+      replaceGlobal: vi.fn(async () => ({ status: 'conflict', currentRevision: 'sha256:global-2' })),
+    })
+    renderSection(api)
+    await screen.findByRole('textbox')
+    fireEvent.click(screen.getByRole('button', { name: en.saveGlobal }))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toBe(en.conflict)
+    expect(api.replaceGlobal).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders the Workspaces tab through its own list call', async () => {
+    const api = makeApi()
+    renderSection(api)
+    await screen.findByRole('textbox')
+    expect(api.listWorkspaces).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: en.workspacesTab }))
+    await screen.findByText(en.workspaceEmpty)
+    expect(api.listWorkspaces).toHaveBeenCalledTimes(1)
   })
 })
