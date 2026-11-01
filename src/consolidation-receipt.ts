@@ -121,7 +121,8 @@ export class ConsolidationReceiptStore {
     if (!existsSync(this.directory)) return []
     return readdirSync(this.directory, { withFileTypes: true })
       .filter(entry => entry.isFile() && /^review-[a-f0-9]{64}\.md$/u.test(entry.name))
-      .map(entry => this.read(entry.name.slice(0, -3))!)
+      .map(entry => this.readScanned(entry.name.slice(0, -3)))
+      .filter((receipt): receipt is ConsolidationReceipt => receipt !== undefined)
       .filter(receipt => receipt.sourceSessionId === sourceSessionId && receipt.state === 'committing')
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.reviewId.localeCompare(right.reviewId))
   }
@@ -181,7 +182,23 @@ export class ConsolidationReceiptStore {
     if (!existsSync(this.directory)) return []
     return readdirSync(this.directory, { withFileTypes: true })
       .filter(entry => entry.isFile() && /^review-[a-f0-9]{64}\.md$/u.test(entry.name))
-      .map(entry => this.read(entry.name.slice(0, -3))!)
+      .map(entry => this.readScanned(entry.name.slice(0, -3)))
+      .filter((receipt): receipt is ConsolidationReceipt => receipt !== undefined)
+  }
+
+  /**
+   * Batch scans must tolerate one corrupt or hand-edited receipt file: skip it
+   * with a warning instead of failing the whole consolidation pipeline. Direct
+   * reads (`read`) stay strict so a targeted commit still fails loudly.
+   */
+  private readScanned(reviewId: string): ConsolidationReceipt | undefined {
+    try {
+      return this.read(reviewId)
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn(`[dsh-memory] ignoring unreadable consolidation receipt ${reviewId}: ${message}`)
+      return undefined
+    }
   }
 }
 
@@ -472,7 +489,8 @@ function serializeReceipt(receipt: ConsolidationReceipt): string {
 }
 
 function parseReceipt(source: string, expectedReviewId: string): ConsolidationReceipt {
-  const match = /^---\n([\s\S]*?)\n---(?:\n|$)/u.exec(source)
+  // Receipts are Markdown files a user may open in any editor; tolerate CRLF line endings.
+  const match = /^---\n([\s\S]*?)\n---(?:\n|$)/u.exec(source.replace(/\r\n/gu, '\n'))
   if (match?.[1] === undefined) throw new ConsolidationReceiptError('receipt must contain YAML frontmatter')
   try {
     return parseReceiptDocument(parse(match[1]), expectedReviewId)

@@ -118,4 +118,22 @@ describe('consolidation evidence projection', () => {
     const code = `\`\`\`text\n${'x'.repeat(MAX_INLINE_CODE_BLOCK_BYTES + 1)}\n\`\`\``
     expect(sanitizeConsolidationEvidenceText(`before\n${code}\nafter`)).toMatch(/omitted code block: \d+ bytes/u)
   })
+
+  it('redacts quoted key-value pairs, bare JWTs, and PEM private key blocks', () => {
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJVadQssw5c'
+    const text = sanitizeConsolidationEvidenceText([
+      '"api_key": "super-secret-value"',
+      'plain note mentioning token without a separator',
+      jwt,
+      '-----BEGIN RSA PRIVATE KEY-----',
+      'MIIEowIBAAKCAQEA',
+      '-----END RSA PRIVATE KEY-----',
+    ].join('\n'))
+    expect(text).toContain('"api_key": "[REDACTED]"')
+    expect(text).not.toContain('super-secret-value')
+    expect(text).not.toContain('eyJhbGciOiJIUzI1NiJ9')
+    expect(text).toContain('[REDACTED]')
+    expect(text).not.toContain('MIIEowIBAAKCAQEA')
+    expect(text).toContain('-----BEGIN PRIVATE KEY----- [REDACTED] -----END PRIVATE KEY-----')
+  })
 })

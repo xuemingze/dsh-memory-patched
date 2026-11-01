@@ -291,7 +291,7 @@ function createMemoryUpdateTool(store: MarkdownMemoryStore, observations: Memory
               changes: {
                 type: 'array',
                 required: true,
-                description: 'One atomic batch. Put full records and place deletes before puts.',
+                description: 'One atomic batch. Put full records and place deletes before puts. Each put item must have exactly action, name, description, type, content; each delete item exactly action and name. Extra fields (for example metadata) are rejected.',
                 items: {
                   oneOf: [
                     {

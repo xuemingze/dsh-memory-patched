@@ -430,10 +430,36 @@ function readWorkspaceDirectory(requestedDirectory: string): WorkspaceMemoryView
     .filter(entry => entry.isFile() && entry.name.endsWith('.md') && entry.name !== INDEX_FILENAME)
     .map(entry => entry.name)
     .sort()
-  const sources = files.map(filename => [filename, normalizeMarkdown(readFileSync(join(directory, filename), 'utf8'))] as const)
-  const records = sources.map(([filename, source]) => parseWorkspaceRecord(filename, source))
+  const sources: Array<readonly [string, string]> = []
+  const records: WorkspaceMemory[] = []
+  for (const filename of files) {
+    const path = join(directory, filename)
+    let source: string
+    try {
+      source = normalizeMarkdown(readFileSync(path, 'utf8'))
+    } catch (error: unknown) {
+      warnUnreadableRecord(path, error)
+      continue
+    }
+    try {
+      records.push(parseWorkspaceRecord(filename, source))
+    } catch (error: unknown) {
+      warnUnreadableRecord(path, error)
+      continue
+    }
+    sources.push([filename, source] as const)
+  }
   const index = renderIndex(records)
   return { records, index, revision: workspaceRevision(sources) }
+}
+
+/**
+ * Workspace records are user-editable Markdown, so one broken file must degrade
+ * to a warning instead of breaking prompt assembly or the settings page.
+ */
+function warnUnreadableRecord(path: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error)
+  console.warn(`[dsh-memory] ignoring unreadable workspace record ${path}: ${message}`)
 }
 
 /** Resolve `$DSH_HOME/memory`, falling back to `~/.dsh/memory`. */
@@ -480,7 +506,7 @@ function emptyWorkspaceView(): WorkspaceMemoryView {
 }
 
 function parseWorkspaceRecord(filename: string, source: string): WorkspaceMemory {
-  const normalized = normalizeMarkdown(source)
+  const normalized = normalizeMarkdown(source.replace(/\r\n/gu, '\n'))
   if (!normalized.startsWith('---\n')) throw new MemoryValidationError(`${filename}: missing YAML frontmatter`)
   const end = normalized.indexOf('\n---\n', 4)
   if (end < 0) throw new MemoryValidationError(`${filename}: unterminated YAML frontmatter`)

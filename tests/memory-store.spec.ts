@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   MarkdownMemoryStore,
   MemoryConflictError,
@@ -103,6 +103,54 @@ describe('MarkdownMemoryStore', () => {
     expect(view.index).toContain('[review-before-publish](review-before-publish.md)')
     expect(readFileSync(join(scope.directory, 'MEMORY.md'), 'utf8')).toBe(view.index)
     expect(readFileSync(join(scope.directory, 'review-before-publish.md'), 'utf8')).toContain('type: feedback')
+  })
+
+  it('isolates one unreadable record file instead of failing the whole Workspace', async () => {
+    const memory = store()
+    memory.initialize()
+    const scope = memory.scopeForCwd('/work/tolerant')
+    const empty = await memory.readWorkspace(scope)
+    await memory.commitWorkspace({
+      scope,
+      expectedRevision: empty.revision,
+      changes: [{ action: 'put', record: {
+        name: 'healthy-record',
+        description: 'Survives a broken sibling file.',
+        type: 'project',
+        content: 'Keep reading the rest of the directory.\n',
+      } }],
+    })
+    writeFileSync(join(scope.directory, 'broken-record.md'), 'not frontmatter at all\n')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const view = await memory.readWorkspace(scope)
+      expect(view.records).toMatchObject([{ name: 'healthy-record' }])
+      expect(view.index).toContain('[healthy-record](healthy-record.md)')
+      expect(view.index).not.toContain('broken-record')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('parses hand-edited CRLF record files', async () => {
+    const memory = store()
+    memory.initialize()
+    const scope = memory.scopeForCwd('/work/crlf')
+    mkdirSync(scope.directory, { recursive: true })
+    writeFileSync(join(scope.directory, 'crlf-record.md'), [
+      '---',
+      'name: crlf-record',
+      'description: Written by a CRLF editor.',
+      'metadata:',
+      '  type: project',
+      '---',
+      '',
+      'CRLF body.',
+      '',
+    ].join('\r\n'))
+    expect(await memory.readWorkspace(scope)).toMatchObject({
+      records: [{ name: 'crlf-record', type: 'project', content: 'CRLF body.\n' }],
+    })
   })
 
   it('discovers Workspaces through opaque ids without exposing Host paths', async () => {

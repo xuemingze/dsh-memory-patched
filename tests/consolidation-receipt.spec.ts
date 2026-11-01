@@ -110,6 +110,29 @@ describe('ConsolidationCommitCoordinator', () => {
     expect(result.receipt.changes.map(change => change.action)).toEqual(['replace-global', 'put'])
   })
 
+  it('skips one corrupt receipt file during batch scans while direct reads stay strict', async () => {
+    const { receipts } = await setup()
+    const corruptId = `review-${'b'.repeat(64)}`
+    mkdirSync(receipts.directory, { recursive: true })
+    writeFileSync(join(receipts.directory, `${corruptId}.md`), 'deliberately corrupt content\n')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      expect(receipts.listCommittingBySourceSession('source-session')).toEqual([])
+      expect([...receipts.latestBySourceSessions(new Map([['source-session', 'source:a']]))]).toEqual([])
+      expect(() => receipts.read(corruptId)).toThrow(ConsolidationReceiptError)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('parses receipts that a hand editor saved with CRLF line endings', async () => {
+    const setupResult = await setup()
+    const result = await setupResult.coordinator.commit(setupResult.request)
+    const path = join(setupResult.receipts.directory, `${result.receipt.reviewId}.md`)
+    writeFileSync(path, readFileSync(path, 'utf8').replace(/\n/gu, '\r\n'))
+    expect(setupResult.receipts.read(result.receipt.reviewId)?.state).toBe('committed')
+  })
+
   it('recovers when Global committed before a Workspace commit failure', async () => {
     const proposal = validProposal() as { outcome: string; changes: unknown[] }
     const setupResult = await setup({

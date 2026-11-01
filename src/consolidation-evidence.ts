@@ -2,6 +2,8 @@
 
 import { foldSurface } from '@deepseek-ai/dsh-session'
 
+import { redactCredentials } from './redact.ts'
+
 export const MAX_INLINE_CODE_BLOCK_BYTES = 4_096
 
 export interface ConsolidationEvidenceTool {
@@ -178,9 +180,3 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
     : undefined
 }
 
-function redactCredentials(value: string): string {
-  return value
-    .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/giu, 'Bearer [REDACTED]')
-    .replace(/(?:sk|key|token)-[A-Za-z0-9._-]{8,}/gu, '[REDACTED]')
-    .replace(/((?:api[_-]?key|authorization|token)\s*[:=]\s*)[^\s,;]+/giu, '$1[REDACTED]')
-}

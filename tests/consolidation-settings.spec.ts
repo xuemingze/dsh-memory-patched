@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ConsolidationSettingsStore,
   readConsolidationModelCatalog,
@@ -43,10 +43,26 @@ describe('ConsolidationSettingsStore', () => {
     })).toMatchObject({ status: 'conflict' })
   })
 
-  it('rejects malformed settings files', () => {
+  it('falls back to defaults when settings files are malformed and can self-heal on commit', () => {
     const { root, store } = setup()
-    writeFileSync(join(root, 'settings.yml'), 'format: 1\nprovider: ok\nmodel: ok\nsecret: no\n')
-    expect(() => store.read()).toThrow(/unknown fields/)
+    const corrupted = 'format: 1\nprovider: ok\nmodel: ok\nsecret: no\n'
+    writeFileSync(join(root, 'settings.yml'), corrupted)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const view = store.read()
+      expect(view.selection).toEqual({ provider: 'default', model: 'cheap' })
+      expect(view.debugEnabled).toBe(false)
+      expect(readFileSync(join(root, 'settings.yml'), 'utf8')).toBe(corrupted)
+      expect(store.commit({
+        expectedRevision: view.revision,
+        selection: { provider: 'default', model: 'cheap' },
+        debugEnabled: false,
+      })).toMatchObject({ status: 'committed' })
+      expect(readFileSync(join(root, 'settings.yml'), 'utf8'))
+        .toBe('format: 2\nprovider: default\nmodel: cheap\ndebug: false\n')
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('reads format 1 settings with debug logging disabled', () => {

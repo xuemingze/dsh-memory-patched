@@ -396,6 +396,7 @@ declare class ConsolidationSettingsStore {
   readonly path: string;
   constructor(root: string, defaults: Pick<ConsolidationWorkerConfig, 'provider' | 'model'>);
   read(): ConsolidationSettingsView;
+  private fallbackSettings;
   commit(input: {
     expectedRevision: MemoryRevision;
     selection: ConsolidationModelSelection;
@@ -765,6 +766,12 @@ declare class ConsolidationReceiptStore {
   withReviewLock<T>(reviewId: string, body: () => Promise<T>): Promise<T>;
   private pathFor;
   private listAll;
+  /**
+   * Batch scans must tolerate one corrupt or hand-edited receipt file: skip it
+   * with a warning instead of failing the whole consolidation pipeline. Direct
+   * reads (`read`) stay strict so a targeted commit still fails loudly.
+   */
+  private readScanned;
 }
 /** Own the pre-commit recheck, durable intent, CAS commit, and crash convergence. */
 declare class ConsolidationCommitCoordinator {

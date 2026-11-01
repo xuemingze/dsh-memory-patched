@@ -1,6 +1,7 @@
 /** Stable-input preparation for one Session consolidation review. */
 
 import { createHash } from 'node:crypto'
+import { resolve } from 'node:path'
 import type {
   MemoryAgentRegistry,
   MemorySessionInspection,
@@ -163,7 +164,7 @@ export class SessionConsolidator {
     assertNotLive(this.agents, input.source.sessionId)
     if (snapshot.revision !== input.source.revision
       || snapshot.header.createdAt !== input.source.createdAt
-      || snapshot.header.cwd !== input.workspace.scope.cwd) {
+      || !sameResolvedPath(snapshot.header.cwd, input.workspace.scope.cwd)) {
       throw new SessionConsolidationError(
         'unstable',
         `Session "${input.source.sessionId}" changed before consolidation commit`,
@@ -204,6 +205,16 @@ function assertNotLive(agents: MemoryAgentRegistry, sessionId: string): void {
   if (agents.get(sessionId) !== undefined) {
     throw new SessionConsolidationError('live', `Session "${sessionId}" is currently live`)
   }
+}
+
+/**
+ * Compare a raw persisted cwd with an already-resolved Workspace cwd.
+ * `resolve` rewrites lexical spellings (forward slashes, trailing separators,
+ * drive-letter-less absolute paths on Windows) into the canonical form the
+ * Workspace scope carries, so only a real cwd change counts as unstable.
+ */
+function sameResolvedPath(raw: string | undefined, resolved: string): boolean {
+  return raw !== undefined && resolve(raw) === resolved
 }
 
 function assertInspectionMatches(snapshot: MemorySessionSnapshot, inspection: MemorySessionInspection): void {

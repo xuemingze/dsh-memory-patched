@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, join } from 'node:path'
 import { parse, stringify } from 'yaml'
 import type { ConsolidationWorkerConfig } from './consolidation-worker.ts'
+import { redactCredentials } from './redact.ts'
 import type {
   ConsolidationModelCatalogResponse,
   ConsolidationModelSelection,
@@ -47,10 +48,25 @@ export class ConsolidationSettingsStore {
   }
 
   read(): ConsolidationSettingsView {
-    const settings = existsSync(this.path)
-      ? parseSettings(readFileSync(this.path, 'utf8'))
-      : { selection: validateSelection(this.defaults), debugEnabled: false }
+    let settings: Omit<ConsolidationSettingsView, 'revision'>
+    if (!existsSync(this.path)) {
+      settings = this.fallbackSettings()
+    } else {
+      try {
+        settings = parseSettings(readFileSync(this.path, 'utf8'))
+      } catch (error: unknown) {
+        // A corrupt or hand-edited settings file must degrade to defaults with a
+        // warning instead of taking down the consolidation runner effect.
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn(`[dsh-memory] ignoring unreadable consolidation settings ${this.path}: ${message}`)
+        settings = this.fallbackSettings()
+      }
+    }
     return { ...settings, revision: settingsRevision(settings) }
+  }
+
+  private fallbackSettings(): Omit<ConsolidationSettingsView, 'revision'> {
+    return { selection: validateSelection(this.defaults), debugEnabled: false }
   }
 
   commit(input: {
@@ -188,8 +204,7 @@ function settingsRevision(settings: Omit<ConsolidationSettingsView, 'revision'>)
 
 function safeDiagnosticMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
-  return message
-    .replace(/(?:sk|key|token)-[A-Za-z0-9._-]{8,}/gu, '[REDACTED]')
+  return redactCredentials(message)
     .replace(/[\r\n]+/gu, ' ')
     .trim() || 'model catalog failed'
 }

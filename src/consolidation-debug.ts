@@ -3,6 +3,7 @@
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { isConsolidationReviewId } from './consolidation-identity.ts'
+import { redactCredentials as redact } from './redact.ts'
 
 export interface ConsolidationDebugIdentity {
   readonly reviewId: string
@@ -81,11 +82,4 @@ function sanitizeValue(value: unknown): unknown {
 
 function safeErrorMessage(error: unknown): string {
   return redact(error instanceof Error ? error.message : String(error))
-}
-
-function redact(value: string): string {
-  return value
-    .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/giu, 'Bearer [REDACTED]')
-    .replace(/(?:sk|key|token)-[A-Za-z0-9._-]{8,}/gu, '[REDACTED]')
-    .replace(/((?:api[_-]?key|authorization|token)\s*[:=]\s*)[^\s,;]+/giu, '$1[REDACTED]')
 }
