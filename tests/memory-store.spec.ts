@@ -259,6 +259,27 @@ describe('MarkdownMemoryStore', () => {
     expect(() => memory.workspaceTargetForKey('not-a-workspace-key')).toThrow(MemoryValidationError)
   })
 
+  it('keeps a non-ASCII Workspace slug readable', () => {
+    const memory = store()
+    const cwd = join(tmpdir(), '闲聊及灵感')
+    const scope = memory.scopeForCwd(cwd)
+    expect(scope.key).toMatch(/^闲聊及灵感-[a-f0-9]{16}$/u)
+    expect(memory.workspaceDisplayNameForCwd(cwd)).toBe('闲聊及灵感')
+    expect(memory.workspaceReferenceForCwd(cwd).displayName).toBe('闲聊及灵感')
+    expect(memory.workspaceTargetForKey(scope.key)).toEqual({
+      key: scope.key,
+      directory: scope.directory,
+    })
+  })
+
+  it('keeps an ASCII Workspace slug unchanged and still accepts a legacy key', () => {
+    const memory = store()
+    const cwd = join(tmpdir(), 'my-project')
+    expect(memory.scopeForCwd(cwd).key).toMatch(/^my-project-[a-f0-9]{16}$/u)
+    expect(memory.workspaceDisplayNameForCwd(cwd)).toBe('my-project')
+    expect(() => memory.workspaceTargetForKey('workspace-0df2b2b7c62357a9')).not.toThrow()
+  })
+
   it('renders only Global memory when a Session has no cwd', () => {
     const memory = store()
     memory.initialize()

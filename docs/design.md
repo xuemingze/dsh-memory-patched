@@ -43,7 +43,7 @@ $DSH_HOME/memory/
 
 `GLOBAL.md` 是一份完整 Markdown，建议使用 `User Profile`、`User Preferences` 和 `General Tips` 三个章节。单个项目里的观察不能自动提升为 Global。
 
-Workspace key 由 `path.resolve(cwd)` 的 basename slug 和路径 SHA-256 前 16 位组成。它不调用 `realpath`，所以 symlink 别名和移动后的目录属于新 Workspace；迁移与合并留给后续能力。
+Workspace key 由 `path.resolve(cwd)` 的 basename slug 和路径 SHA-256 前 16 位组成；slug 保留 Unicode 字母与数字（`slugify` 只把其余字符折叠成 `-`），所以非 ASCII 目录名保持可读。它不调用 `realpath`，所以 symlink 别名和移动后的目录属于新 Workspace；迁移与合并留给后续能力。
 
 模型只获得 Global 和当前 Workspace 的路径。第一版不披露或主动搜索其他 Workspace。普通文件工具下的这条规则是 Prompt policy，不是敌对输入下的文件权限隔离；所有写入仍由 Host 强制限定 scope。
 

@@ -66,7 +66,7 @@ Workspace commit 在同一 scope 的进程内锁中完成：读取并比较 revi
 
 ## Workspace identity
 
-v0.1 使用 lexical absolute cwd 作为身份输入：`path.resolve(cwd)` 后计算 SHA-256 的前 16 个十六进制字符，并以 cwd basename 的安全 slug 作为可读前缀：
+v0.1 使用 lexical absolute cwd 作为身份输入：`path.resolve(cwd)` 后计算 SHA-256 的前 16 个十六进制字符，并以 cwd basename 的安全 slug 作为可读前缀。slug 保留 Unicode 字母与数字，其余字符折叠成 `-`；ASCII basename 的 key 与历史版本逐字节一致，纯非 ASCII basename 在旧版本会退化成字面量 `workspace`：
 
 ```text
 <slug>-<sha256(normalized-absolute-cwd)[0:16]>
