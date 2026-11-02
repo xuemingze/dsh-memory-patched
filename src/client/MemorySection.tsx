@@ -986,6 +986,7 @@ function sessionReceiptStateKey(state: SessionReceiptState): MemoryLocaleKey {
     case 'source-changed': return 'sessionStateSourceChanged'
     case 'target-conflict': return 'sessionStateTargetConflict'
     case 'invalid-proposal': return 'sessionStateInvalidProposal'
+    case 'output-truncated': return 'sessionStateOutputTruncated'
     case 'provider-failed': return 'sessionStateProviderFailed'
     case 'evidence-too-large': return 'sessionStateEvidenceTooLarge'
     case 'internal-error': return 'sessionStateInternalError'

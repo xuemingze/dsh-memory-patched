@@ -36,6 +36,7 @@ type Behavior =
   | { kind: 'invalid'; proposal: unknown }
   | { kind: 'multiple'; proposals: [unknown, unknown] }
   | { kind: 'missing' }
+  | { kind: 'truncated' }
   | { kind: 'provider-failed'; error: Error }
 
 class FakeWorkerHost {
@@ -116,6 +117,10 @@ class FakeWorkerHost {
       data: { header: { system: section.text, tools: this.tools.map(tool => ({ name: tool.name })) } },
     })
     for (const message of this.messages) this.events.push({ type: 'user/message', data: message })
+    if (this.behavior.kind === 'truncated') {
+      this.events.push({ type: 'turn/end', data: { turn: 1, reason: { kind: 'max-tokens' } } })
+      return
+    }
     const tool = this.tools.find(candidate => candidate.name === CONSOLIDATION_PROPOSAL_TOOL)
     if (tool === undefined) throw new Error('proposal tool missing')
     let concluded = false
@@ -294,6 +299,15 @@ describe('SessionConsolidationWorker', () => {
     await expect(new SessionConsolidationWorker(consolidator, host.agents, host.sessions).run(input, 1))
       .rejects.toEqual(expect.objectContaining<Partial<ConsolidationWorkerError>>({ code: 'missing-proposal' }))
     expect(host.modelRequests).toBe(2)
+    expect(host.flushes).toHaveLength(1)
+    expect(host.disposed).toBe(1)
+  })
+
+  it('classifies a token-limited truncation as output-truncated instead of missing-proposal', async () => {
+    const { input, consolidator } = await inputAndConsolidator()
+    const host = new FakeWorkerHost({ kind: 'truncated' })
+    await expect(new SessionConsolidationWorker(consolidator, host.agents, host.sessions).run(input, 1))
+      .rejects.toEqual(expect.objectContaining<Partial<ConsolidationWorkerError>>({ code: 'output-truncated' }))
     expect(host.flushes).toHaveLength(1)
     expect(host.disposed).toBe(1)
   })

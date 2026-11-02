@@ -17,6 +17,7 @@ import {
 import {
   ConsolidationEvidenceTooLargeError,
   ConsolidationProviderError,
+  ConsolidationWorkerError,
 } from '../src/consolidation-worker.ts'
 import { workerSessionIdOf } from '../src/consolidation-identity.ts'
 import type { MemorySessionSnapshot } from '../src/host-contracts.ts'
@@ -210,6 +211,14 @@ describe('SessionConsolidationRunner', () => {
     expect(worker.calls).toBe(2)
   })
 
+  it('records an output-truncated attempt separately from invalid proposals', async () => {
+    const { runner, worker } = await setup()
+    worker.setBehavior(async () => { throw new ConsolidationWorkerError('output-truncated', 'truncated') })
+    const failed = await runner.run('source-session')
+    expect(failed).toMatchObject({ outcome: 'output-truncated', recovered: false })
+    expect(failed.receipt.attempts).toMatchObject([{ attempt: 1, status: 'output-truncated' }])
+    expect(worker.calls).toBe(1)
+  })
   it('classifies cancellation, Provider failure, oversized evidence, and a final source change', async () => {
     const cancelled = await setup()
     cancelled.worker.setBehavior(async () => { throw new DOMException('cancelled', 'AbortError') })

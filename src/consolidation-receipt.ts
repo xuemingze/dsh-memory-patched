@@ -30,6 +30,7 @@ export type ConsolidationReceiptState =
   | 'source-changed'
   | 'target-conflict'
   | 'invalid-proposal'
+  | 'output-truncated'
   | 'provider-failed'
   | 'evidence-too-large'
   | 'internal-error'
@@ -641,7 +642,8 @@ function requireExactKeys(record: Record<string, unknown>, keys: readonly string
 function isReceiptState(value: unknown): value is ConsolidationReceiptState {
   return value === 'committing' || value === 'committed' || value === 'no-change'
     || value === 'cancelled' || value === 'source-changed' || value === 'target-conflict'
-    || value === 'invalid-proposal' || value === 'provider-failed' || value === 'evidence-too-large'
+    || value === 'invalid-proposal' || value === 'output-truncated' || value === 'provider-failed'
+    || value === 'evidence-too-large'
     || value === 'internal-error'
 }
 

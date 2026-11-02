@@ -60,6 +60,7 @@ export type SessionReceiptState =
   | 'source-changed'
   | 'target-conflict'
   | 'invalid-proposal'
+  | 'output-truncated'
   | 'provider-failed'
   | 'evidence-too-large'
   | 'internal-error'
@@ -605,7 +606,8 @@ function isSessionReceiptState(value: unknown): value is SessionReceiptState {
 function isTerminalReceiptState(value: unknown): value is Exclude<SessionReceiptState, 'committing'> {
   return value === 'committed' || value === 'no-change' || value === 'cancelled'
     || value === 'source-changed' || value === 'target-conflict' || value === 'invalid-proposal'
-    || value === 'provider-failed' || value === 'evidence-too-large' || value === 'internal-error'
+    || value === 'output-truncated' || value === 'provider-failed' || value === 'evidence-too-large'
+    || value === 'internal-error'
 }
 
 function isNonNegativeInteger(value: unknown): value is number {

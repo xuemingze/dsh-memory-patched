@@ -47,7 +47,7 @@ interface WorkspaceListResponse {
 }
 /** Deterministic reason why a persisted Session cannot be consolidated. */
 type SessionIneligibleReason = 'live' | 'missing-cwd' | 'workspace-unavailable' | 'unstable';
-type SessionReceiptState = 'committing' | 'committed' | 'no-change' | 'cancelled' | 'source-changed' | 'target-conflict' | 'invalid-proposal' | 'provider-failed' | 'evidence-too-large' | 'internal-error';
+type SessionReceiptState = 'committing' | 'committed' | 'no-change' | 'cancelled' | 'source-changed' | 'target-conflict' | 'invalid-proposal' | 'output-truncated' | 'provider-failed' | 'evidence-too-large' | 'internal-error';
 /** Browser-safe receipt status without model route, Workspace key, or revisions. */
 interface SessionReceiptSummary {
   reviewId: string;
@@ -696,7 +696,7 @@ interface ConsolidationWorkerResult {
 }
 //#endregion
 //#region src/consolidation-receipt.d.ts
-type ConsolidationReceiptState = 'committing' | 'committed' | 'no-change' | 'cancelled' | 'source-changed' | 'target-conflict' | 'invalid-proposal' | 'provider-failed' | 'evidence-too-large' | 'internal-error';
+type ConsolidationReceiptState = 'committing' | 'committed' | 'no-change' | 'cancelled' | 'source-changed' | 'target-conflict' | 'invalid-proposal' | 'output-truncated' | 'provider-failed' | 'evidence-too-large' | 'internal-error';
 interface ConsolidationReceiptAttempt {
   readonly attempt: number;
   readonly workerSessionId: string | null;
@@ -807,7 +807,7 @@ declare class WorkerSessionPlanReplay implements ConsolidationPlanReplay {
 }
 //#endregion
 //#region src/consolidation-runner.d.ts
-type ConsolidationRunOutcome = ConsolidationCommitResult['outcome'] | 'cancelled' | 'source-changed' | 'invalid-proposal' | 'provider-failed' | 'evidence-too-large' | 'internal-error';
+type ConsolidationRunOutcome = ConsolidationCommitResult['outcome'] | 'cancelled' | 'source-changed' | 'invalid-proposal' | 'output-truncated' | 'provider-failed' | 'evidence-too-large' | 'internal-error';
 interface ConsolidationRunResult {
   readonly outcome: ConsolidationRunOutcome;
   readonly recovered: boolean;

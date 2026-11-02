@@ -27,6 +27,7 @@ export type ConsolidationRunOutcome = ConsolidationCommitResult['outcome']
   | 'cancelled'
   | 'source-changed'
   | 'invalid-proposal'
+  | 'output-truncated'
   | 'provider-failed'
   | 'evidence-too-large'
   | 'internal-error'
@@ -205,6 +206,9 @@ function classifyFailure(
   signal: AbortSignal | undefined,
 ): Exclude<ConsolidationReceiptState, 'committing' | 'committed' | 'no-change' | 'target-conflict'> {
   if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) return 'cancelled'
+  if (error instanceof ConsolidationWorkerError && error.code === 'output-truncated') {
+    return 'output-truncated'
+  }
   if (error instanceof ConsolidationProposalError || error instanceof ConsolidationWorkerError) {
     return 'invalid-proposal'
   }
