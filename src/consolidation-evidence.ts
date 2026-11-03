@@ -15,6 +15,7 @@ export interface ConsolidationEvidenceTool {
 export interface ConsolidationEvidenceTurn {
   readonly fromSeq: number
   readonly toSeq: number
+  readonly time: number
   readonly user: readonly string[]
   readonly summaries: readonly string[]
   readonly assistantFinal: string | null
@@ -24,6 +25,7 @@ export interface ConsolidationEvidenceTurn {
 interface MutableTurn {
   fromSeq: number
   toSeq: number
+  time: number
   user: string[]
   summaries: string[]
   assistantFinal: string | null
@@ -49,15 +51,19 @@ export function projectConsolidationEvidence(events: readonly unknown[]): Consol
 
   for (const event of records) {
     const seq = event.seq as number
+    const time = eventTime(event)
     if (event.type === 'turn/start') {
       finish()
-      current = emptyTurn(seq)
+      current = emptyTurn(seq, time)
       continue
     }
-    if (current !== undefined) current.toSeq = seq
+    if (current !== undefined) {
+      current.toSeq = seq
+      if (time > current.time) current.time = time
+    }
 
     if (surfaceNodes.has(seq)) {
-      const target = current ?? emptyTurn(seq)
+      const target = current ?? emptyTurn(seq, time)
       projectSurfaceEvent(event, target, callNames)
       if (current === undefined && hasEvidence(target)) turns.push(freezeTurn(target))
     }
@@ -66,6 +72,10 @@ export function projectConsolidationEvidence(events: readonly unknown[]): Consol
   }
   finish()
   return turns
+}
+
+function eventTime(event: Record<string, unknown>): number {
+  return typeof event.time === 'number' && Number.isFinite(event.time) ? event.time : 0
 }
 
 /** One model-facing text may not exceed this size; larger texts are truncated with a marker. */
@@ -169,8 +179,8 @@ function requireEvent(value: unknown, index: number): Record<string, unknown> & 
   return event as Record<string, unknown> & { seq: number; type: string }
 }
 
-function emptyTurn(seq: number): MutableTurn {
-  return { fromSeq: seq, toSeq: seq, user: [], summaries: [], assistantFinal: null, tools: [] }
+function emptyTurn(seq: number, time = 0): MutableTurn {
+  return { fromSeq: seq, toSeq: seq, time, user: [], summaries: [], assistantFinal: null, tools: [] }
 }
 
 function hasEvidence(turn: MutableTurn): boolean {
@@ -181,6 +191,7 @@ function freezeTurn(turn: MutableTurn): ConsolidationEvidenceTurn {
   return {
     fromSeq: turn.fromSeq,
     toSeq: turn.toSeq,
+    time: turn.time,
     user: [...turn.user],
     summaries: [...turn.summaries],
     assistantFinal: turn.assistantFinal,

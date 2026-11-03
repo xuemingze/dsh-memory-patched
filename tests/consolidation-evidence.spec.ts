@@ -63,6 +63,7 @@ describe('consolidation evidence projection', () => {
     expect(evidence).toEqual([{
       fromSeq: 0,
       toSeq: 9,
+      time: 0,
       user: ['Prefer focused tests. api_key=[REDACTED]', '[omitted non-text content: image]'],
       summaries: [],
       assistantFinal: 'Use the smallest relevant unit test.',
@@ -103,6 +104,7 @@ describe('consolidation evidence projection', () => {
     expect(evidence).toEqual([{
       fromSeq: 2,
       toSeq: 2,
+      time: 0,
       user: [],
       summaries: ['The user chose focused verification.'],
       assistantFinal: null,
@@ -144,5 +146,35 @@ describe('consolidation evidence projection', () => {
     expect(text).toContain('[truncated ')
     expect(text.startsWith('很'.repeat(100))).toBe(true)
     expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(MAX_EVIDENCE_TEXT_BYTES + 64)
+  })
+
+  it('carries the last event time of each turn for temporal guarding', () => {
+    const evidence = projectConsolidationEvidence([
+      { seq: 0, type: 'turn/start', time: 1000, data: {} },
+      { seq: 1, type: 'user/message', time: 1500, data: { source: { kind: 'user' }, content: 'hi' } },
+      { seq: 2, type: 'assistant/message', time: 2000, data: { message: { content: 'ok' } } },
+      { seq: 3, type: 'turn/end', time: 2500, data: {} },
+    ])
+    expect(evidence).toHaveLength(1)
+    expect(evidence[0]!.time).toBe(2500)
+  })
+
+  it('falls back to the largest seen event time when the turn never ends', () => {
+    const evidence = projectConsolidationEvidence([
+      { seq: 0, type: 'turn/start', time: 1000, data: {} },
+      { seq: 1, type: 'user/message', time: 1500, data: { source: { kind: 'user' }, content: 'hi' } },
+    ])
+    expect(evidence).toHaveLength(1)
+    expect(evidence[0]!.time).toBe(1500)
+  })
+
+  it('defaults turn time to 0 when events carry no time at all', () => {
+    const evidence = projectConsolidationEvidence([
+      { seq: 0, type: 'turn/start', data: {} },
+      { seq: 1, type: 'user/message', data: { source: { kind: 'user' }, content: 'hi' } },
+      { seq: 2, type: 'turn/end', data: {} },
+    ])
+    expect(evidence).toHaveLength(1)
+    expect(evidence[0]!.time).toBe(0)
   })
 })
