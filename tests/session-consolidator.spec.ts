@@ -70,7 +70,7 @@ describe('SessionConsolidator input preparation', () => {
     expect(listCalls).toBe(2)
     expect(prepared).toMatchObject({
       reviewId: expect.stringMatching(/^review-[a-f0-9]{64}$/u),
-      consolidatorVersion: 'm3-multistep-global-v5',
+      consolidatorVersion: 'm3-multistep-global-v6',
       source: { sessionId: 'source-session', revision: 'source:a', createdAt: 42 },
       workspace: { revision: expect.stringMatching(/^sha256:/u), records: [{ name: 'existing-rule' }] },
     })

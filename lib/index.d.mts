@@ -597,7 +597,7 @@ declare module '@deepseek-ai/cordis' {
 //#endregion
 //#region src/session-consolidator.d.ts
 /** Versioned semantics included in every deterministic review identity. */
-declare const CONSOLIDATOR_VERSION = "m3-multistep-global-v5";
+declare const CONSOLIDATOR_VERSION = "m3-multistep-global-v6";
 type SessionConsolidationErrorCode = 'not-found' | 'ambiguous' | 'live' | 'archived' | 'subagent' | 'missing-cwd' | 'workspace-unavailable' | 'unstable' | 'inspection-mismatch';
 /** Closed preparation failure vocabulary used by Host orchestration and receipts. */
 declare class SessionConsolidationError extends Error {

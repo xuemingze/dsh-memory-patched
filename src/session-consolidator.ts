@@ -25,7 +25,7 @@ import {
 import type { MemoryRevision } from './protocol.ts'
 
 /** Versioned semantics included in every deterministic review identity. */
-export const CONSOLIDATOR_VERSION = 'm3-multistep-global-v5'
+export const CONSOLIDATOR_VERSION = 'm3-multistep-global-v6'
 
 export type SessionConsolidationErrorCode =
   | 'not-found'
