@@ -72,6 +72,8 @@ export interface WorkspaceMemory {
   readonly description: string
   readonly type: WorkspaceMemoryType
   readonly content: string
+  /** Epoch ms of the newest consolidated evidence that produced this record. */
+  readonly lastEvidenceTime?: number
 }
 
 /** Complete Workspace view and its derived index. */
@@ -553,12 +555,22 @@ function parseWorkspaceRecord(filename: string, source: string): WorkspaceMemory
   if (metadata === null || typeof metadata !== 'object' || Array.isArray(metadata)) {
     throw new MemoryValidationError(`${filename}: metadata must be an object`)
   }
-  requireKeys(metadata as Record<string, unknown>, ['type'], `${filename} metadata`)
+  const metadataRecord = metadata as Record<string, unknown>
+  const metadataKeys = Object.keys(metadataRecord).sort()
+  const metadataOk = (metadataKeys.length === 1 && metadataKeys[0] === 'type')
+    || (metadataKeys.length === 2 && metadataKeys[0] === 'lastEvidenceTime' && metadataKeys[1] === 'type')
+  if (!metadataOk) {
+    throw new MemoryValidationError(`${filename} metadata must contain type and optionally lastEvidenceTime`)
+  }
+  const lastEvidenceTimeRaw = metadataRecord.lastEvidenceTime
   const record: WorkspaceMemory = {
     name: String(frontmatter.name),
     description: String(frontmatter.description),
     type: String((metadata as Record<string, unknown>).type) as WorkspaceMemoryType,
     content: normalizeMarkdown(normalized.slice(end + 5).replace(/^\n/u, '')),
+    ...(typeof lastEvidenceTimeRaw === 'number' && Number.isFinite(lastEvidenceTimeRaw)
+      ? { lastEvidenceTime: lastEvidenceTimeRaw }
+      : {}),
   }
   validateRecord(record)
   if (filename !== `${record.name}.md`) {
@@ -572,7 +584,10 @@ function serializeWorkspaceRecord(record: WorkspaceMemory): string {
   const frontmatter = stringify({
     name: record.name,
     description: record.description,
-    metadata: { type: record.type },
+    metadata: {
+      type: record.type,
+      ...(record.lastEvidenceTime !== undefined ? { lastEvidenceTime: record.lastEvidenceTime } : {}),
+    },
   }).trimEnd()
   return `---\n${frontmatter}\n---\n\n${normalizeMarkdown(record.content)}`
 }

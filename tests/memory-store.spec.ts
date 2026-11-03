@@ -279,6 +279,42 @@ describe('MarkdownMemoryStore', () => {
     expect(memory.readWorkspaceById(summary.workspaceId)?.revision).toBe(stable.revision)
   })
 
+  it('persists lastEvidenceTime through commit, read, and the on-disk frontmatter', async () => {
+    const memory = store()
+    memory.initialize()
+    const scope = memory.scopeForCwd('/work/temporal')
+    const empty = await memory.readWorkspace(scope)
+    await memory.commitWorkspace({
+      scope,
+      expectedRevision: empty.revision,
+      changes: [
+        { action: 'put', record: {
+          name: 'stamped',
+          description: 'Carries an evidence timestamp.',
+          type: 'project',
+          content: 'Git works now.\n',
+          lastEvidenceTime: 1_790_000_000_000,
+        } },
+        { action: 'put', record: {
+          name: 'unstamped',
+          description: 'No timestamp yet.',
+          type: 'project',
+          content: 'Legacy record.\n',
+        } },
+      ],
+    })
+    const view = await memory.readWorkspace(scope)
+    const stamped = view.records.find(record => record.name === 'stamped')!
+    const unstamped = view.records.find(record => record.name === 'unstamped')!
+    expect(stamped.lastEvidenceTime).toBe(1_790_000_000_000)
+    expect(unstamped.lastEvidenceTime).toBeUndefined()
+
+    const raw = readFileSync(join(scope.directory, 'stamped.md'), 'utf8')
+    expect(raw).toContain('lastEvidenceTime: 1790000000000')
+    const unstampedRaw = readFileSync(join(scope.directory, 'unstamped.md'), 'utf8')
+    expect(unstampedRaw).not.toContain('lastEvidenceTime')
+  })
+
   it('deletes a record as one revision-checked Workspace generation', async () => {
     const memory = store()
     memory.initialize()
