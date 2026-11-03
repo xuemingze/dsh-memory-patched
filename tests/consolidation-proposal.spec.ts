@@ -453,3 +453,107 @@ describe('consolidation proposal dedupe', () => {
     expect(conservativePuts[0]).toMatchObject({ record: { name: 'dsh-ops-reinstall' } })
   })
 })
+
+describe('consolidation temporal guard', () => {
+  const T8 = 1_780_000_000_000
+  const T9 = T8 + 3_600_000
+
+  async function temporalWorkspace(record: { name: string; content: string; lastEvidenceTime?: number }) {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-memory-temporal-'))
+    roots.push(root)
+    const store = new MarkdownMemoryStore(new Context(), join(root, 'memory'))
+    store.initialize()
+    const scope = store.scopeForCwd('/work/temporal-guard')
+    const empty = await store.readWorkspace(scope)
+    await store.commitWorkspace({
+      scope,
+      expectedRevision: empty.revision,
+      changes: [{ action: 'put', record: {
+        name: record.name,
+        description: 'Git availability.',
+        type: 'project',
+        content: record.content,
+        ...(record.lastEvidenceTime === undefined ? {} : { lastEvidenceTime: record.lastEvidenceTime }),
+      } }],
+    })
+    return { store, view: await store.readWorkspace(scope) }
+  }
+
+  function clockedEvidence(time: number, text: string) {
+    return [{ fromSeq: 0, toSeq: 0, time, user: [text], summaries: [], assistantFinal: null, tools: [] }]
+  }
+
+  it('lets newer evidence overwrite an older record and stamps the new time', async () => {
+    const target = await temporalWorkspace({ name: 'git-status', content: 'Git 用不了。\n', lastEvidenceTime: T8 })
+    const planned = parseConsolidationProposal({
+      outcome: 'changes',
+      changes: [{
+        action: 'put',
+        record: { name: 'git-status', description: 'Git 可用性。', type: 'project', content: 'Git 现在可用。\n' },
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      }],
+    }, { sourceEvidence: clockedEvidence(T9, 'git 现在可用了'), global: await target.store.readGlobal(), workspace: target.view })
+
+    expect(planned.proposal.outcome).toBe('changes')
+    const record = planned.preview.records.find(entry => entry.name === 'git-status')!
+    expect(record.content).toContain('现在可用')
+    expect(record.lastEvidenceTime).toBe(T9)
+  })
+
+  it('drops an older change instead of overwriting a newer record', async () => {
+    const target = await temporalWorkspace({ name: 'git-status', content: 'Git 现在可用。\n', lastEvidenceTime: T9 })
+    const planned = parseConsolidationProposal({
+      outcome: 'changes',
+      changes: [{
+        action: 'put',
+        record: { name: 'git-status', description: 'Git 可用性。', type: 'project', content: 'Git 用不了。\n' },
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      }],
+    }, { sourceEvidence: clockedEvidence(T8, 'git 用不了'), global: await target.store.readGlobal(), workspace: target.view })
+
+    expect(planned.staleChanges).toEqual([{ index: 0, reason: 'stale-evidence' }])
+    expect(planned.proposal).toEqual({ outcome: 'no-change', changes: [] })
+    expect(planned.preview.records.find(entry => entry.name === 'git-status')!.content).toBe('Git 现在可用。\n')
+  })
+
+  it('treats a record without a timestamp as older than any evidence', async () => {
+    const target = await temporalWorkspace({ name: 'git-status', content: 'Legacy note.\n' })
+    const planned = parseConsolidationProposal({
+      outcome: 'changes',
+      changes: [{
+        action: 'put',
+        record: { name: 'git-status', description: 'Git 可用性。', type: 'project', content: 'Git 现在可用。\n' },
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      }],
+    }, { sourceEvidence: clockedEvidence(T8, 'git 现在可用了'), global: await target.store.readGlobal(), workspace: target.view })
+
+    expect(planned.staleChanges).toBeUndefined()
+    expect(planned.preview.records.find(entry => entry.name === 'git-status')!.lastEvidenceTime).toBe(T8)
+  })
+
+  it('allows same-instant evidence to update the record', async () => {
+    const target = await temporalWorkspace({ name: 'git-status', content: 'Git 用不了。\n', lastEvidenceTime: T9 })
+    const planned = parseConsolidationProposal({
+      outcome: 'changes',
+      changes: [{
+        action: 'put',
+        record: { name: 'git-status', description: 'Git 可用性。', type: 'project', content: 'Git 现在可用。\n' },
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      }],
+    }, { sourceEvidence: clockedEvidence(T9, 'git 现在可用了'), global: await target.store.readGlobal(), workspace: target.view })
+
+    expect(planned.staleChanges).toBeUndefined()
+    expect(planned.preview.records.find(entry => entry.name === 'git-status')!.content).toContain('现在可用')
+  })
+
+  it('guards a delete driven by older evidence', async () => {
+    const target = await temporalWorkspace({ name: 'git-status', content: 'Git 现在可用。\n', lastEvidenceTime: T9 })
+    const planned = parseConsolidationProposal({
+      outcome: 'changes',
+      changes: [{ action: 'delete', name: 'git-status', evidence: [{ fromSeq: 0, toSeq: 0 }] }],
+    }, { sourceEvidence: clockedEvidence(T8, 'git 用不了'), global: await target.store.readGlobal(), workspace: target.view })
+
+    expect(planned.staleChanges).toEqual([{ index: 0, reason: 'stale-evidence' }])
+    expect(planned.preview.records.map(entry => entry.name)).toEqual(['git-status'])
+  })
+})

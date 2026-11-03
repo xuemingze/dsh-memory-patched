@@ -58,6 +58,12 @@ export type ConsolidationDedupeEvent =
   | { readonly kind: 'dropped-signpost-section'; readonly heading: string }
   | { readonly kind: 'dedupe-failed'; readonly error: string }
 
+/** One change rejected because its evidence predates the record it would rewrite. */
+export interface StaleConsolidationChange {
+  readonly index: number
+  readonly reason: 'stale-evidence'
+}
+
 /** Canonical proposal plus the exact Workspace generation it would produce. */
 export interface ConsolidationProposalPlan {
   readonly proposal: ConsolidationProposal
@@ -65,6 +71,7 @@ export interface ConsolidationProposalPlan {
   readonly globalPreview: GlobalMemoryPreview
   readonly preview: WorkspaceMemoryPreview
   readonly dedupe?: readonly ConsolidationDedupeEvent[]
+  readonly staleChanges?: readonly StaleConsolidationChange[]
 }
 
 /** Raised when an untrusted worker proposal violates the closed contract. */
@@ -120,17 +127,21 @@ export function parseConsolidationProposal(
   }
   changes.sort(compareChanges)
 
+  const guarded = applyTemporalGuard(changes, input)
+  const guardedChanges = guarded.changes
+  const stale = guarded.stale.length === 0 ? {} : { staleChanges: guarded.stale }
+
   const dedupeMode = input.dedupe ?? 'merge'
-  let effectiveChanges = changes
+  let effectiveChanges: readonly ConsolidationProposalChange[] = guardedChanges
   let dedupeEvents: readonly ConsolidationDedupeEvent[] | undefined
   if (dedupeMode !== 'off') {
     try {
-      const applied = applyDedupe(changes, input, dedupeMode)
+      const applied = applyDedupe(guardedChanges, input, dedupeMode)
       effectiveChanges = applied.changes
       if (applied.events.length > 0) dedupeEvents = applied.events
     } catch (cause: unknown) {
       // Dedupe must never break consolidation: fall back to the untouched proposal.
-      effectiveChanges = changes
+      effectiveChanges = guardedChanges
       dedupeEvents = [{
         kind: 'dedupe-failed',
         error: redactCredentials(cause instanceof Error ? cause.message : String(cause)),
@@ -156,9 +167,76 @@ export function parseConsolidationProposal(
   }
   const dedupe = dedupeEvents === undefined ? {} : { dedupe: dedupeEvents }
   if (!globalPreview.changed && !preview.changed) {
-    return { proposal: { outcome: 'no-change', changes: [] }, globalBefore: { ...input.global }, globalPreview, preview, ...dedupe }
+    return {
+      proposal: { outcome: 'no-change', changes: [] },
+      globalBefore: { ...input.global }, globalPreview, preview, ...dedupe, ...stale,
+    }
   }
-  return { proposal: { outcome: 'changes', changes: effectiveChanges }, globalBefore: { ...input.global }, globalPreview, preview, ...dedupe }
+  return {
+    proposal: { outcome: 'changes', changes: effectiveChanges },
+    globalBefore: { ...input.global }, globalPreview, preview, ...dedupe, ...stale,
+  }
+}
+
+/** Reject changes whose evidence predates the record they would rewrite, and stamp survivors. */
+function applyTemporalGuard(
+  changes: readonly ConsolidationProposalChange[],
+  input: {
+    readonly sourceEvidence: readonly ConsolidationEvidenceTurn[]
+    readonly workspace: WorkspaceMemoryView
+  },
+): { changes: ConsolidationProposalChange[]; stale: StaleConsolidationChange[] } {
+  const existing = new Map(input.workspace.records.map(record => [record.name, record]))
+  const kept: ConsolidationProposalChange[] = []
+  const stale: StaleConsolidationChange[] = []
+  changes.forEach((change, index) => {
+    if (change.action === 'replace-global') {
+      kept.push(change)
+      return
+    }
+    const name = change.action === 'put' ? change.record.name : change.name
+    const record = existing.get(name)
+    const evidenceTime = evidenceTimeOf(change.evidence, input.sourceEvidence)
+    if (record !== undefined && evidenceTime < (record.lastEvidenceTime ?? 0)) {
+      stale.push({ index, reason: 'stale-evidence' })
+      return
+    }
+    if (change.action === 'put') {
+      kept.push({
+        ...change,
+        record: {
+          ...change.record,
+          // Unknown evidence time (0) stays unstamped: 0 and "absent" mean the same to the guard.
+          ...(evidenceTime > 0 ? { lastEvidenceTime: evidenceTime } : {}),
+        },
+      })
+      return
+    }
+    kept.push(change)
+  })
+  return { changes: kept, stale }
+}
+
+function evidenceTimeOf(
+  evidence: readonly ConsolidationEvidenceRange[],
+  turns: readonly ConsolidationEvidenceTurn[],
+): number {
+  let time = 0
+  for (const range of evidence) {
+    for (const turn of turns) {
+      if (turn.fromSeq <= range.toSeq && turn.toSeq >= range.fromSeq && turn.time > time) time = turn.time
+    }
+  }
+  return time
+}
+
+/** Keep the newest stamp when two records are folded together. */
+function mergedEvidenceTime(
+  left: WorkspaceMemory,
+  right: WorkspaceMemory,
+): Pick<WorkspaceMemory, 'lastEvidenceTime'> {
+  const values = [left.lastEvidenceTime, right.lastEvidenceTime].filter((value): value is number => value !== undefined)
+  return values.length === 0 ? {} : { lastEvidenceTime: Math.max(...values) }
 }
 
 function parseChange(
@@ -392,6 +470,7 @@ function applyDedupe(
         description: longerDescription(put.record, existing),
         type: nameSurvivorIsNew ? put.record.type : existing.type,
         content: mergedContent(contentSurvivor, contentAbsorbed),
+        ...mergedEvidenceTime(put.record, existing),
       },
       evidence: put.evidence,
     })
@@ -418,7 +497,12 @@ function applyDedupe(
       const absorbed = survivor === put.record ? twin.record : put.record
       finalPuts[twinIndex] = {
         ...twin,
-        record: { ...survivor, description: longerDescription(survivor, absorbed), content: mergedContent(survivor, absorbed) },
+        record: {
+          ...survivor,
+          description: longerDescription(survivor, absorbed),
+          content: mergedContent(survivor, absorbed),
+          ...mergedEvidenceTime(survivor, absorbed),
+        },
       }
       events.push({ kind: 'merged-put', kept: twin.record.name, absorbed: put.record.name, intersection: intersectionOf(survivor, absorbed) })
       continue
@@ -439,6 +523,7 @@ function applyDedupe(
           description: longerDescription(survivor, absorbed),
           type: related.record.type,
           content: mergedContent(survivor, absorbed),
+          ...mergedEvidenceTime(survivor, absorbed),
         },
       }
       events.push({ kind: 'merged-put', kept: keptName, absorbed: put.record.name, intersection: intersectionOf(survivor, absorbed) })

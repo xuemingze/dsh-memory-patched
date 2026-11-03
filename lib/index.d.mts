@@ -365,6 +365,11 @@ type ConsolidationDedupeEvent = {
   readonly kind: 'dedupe-failed';
   readonly error: string;
 };
+/** One change rejected because its evidence predates the record it would rewrite. */
+interface StaleConsolidationChange {
+  readonly index: number;
+  readonly reason: 'stale-evidence';
+}
 /** Canonical proposal plus the exact Workspace generation it would produce. */
 interface ConsolidationProposalPlan {
   readonly proposal: ConsolidationProposal;
@@ -372,6 +377,7 @@ interface ConsolidationProposalPlan {
   readonly globalPreview: GlobalMemoryPreview;
   readonly preview: WorkspaceMemoryPreview;
   readonly dedupe?: readonly ConsolidationDedupeEvent[];
+  readonly staleChanges?: readonly StaleConsolidationChange[];
 }
 //#endregion
 //#region src/consolidation-debug.d.ts
