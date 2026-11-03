@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -16,6 +16,7 @@ import {
   type ConsolidationAgentErrorListener,
   type ConsolidationWorkerScope,
 } from '../src/consolidation-worker.ts'
+import { ConsolidationDebugStore as ConsolidationDebugLog } from '../src/consolidation-debug.ts'
 import { MarkdownMemoryStore } from '../src/memory-store.ts'
 import { SessionConsolidator, type SessionConsolidationInput } from '../src/session-consolidator.ts'
 
@@ -149,6 +150,7 @@ class FakeWorkerHost {
 async function inputAndConsolidator(): Promise<{
   input: SessionConsolidationInput
   consolidator: SessionConsolidator
+  store: MarkdownMemoryStore
 }> {
   const root = mkdtempSync(join(tmpdir(), 'dsh-memory-worker-'))
   roots.push(root)
@@ -181,7 +183,7 @@ async function inputAndConsolidator(): Promise<{
     async listSnapshots() { return [] },
     async inspect() { throw new Error('not used') },
   }, { get() { return undefined } })
-  return { input, consolidator }
+  return { input, consolidator, store }
 }
 
 const validProposal = {
@@ -447,5 +449,91 @@ describe('SessionConsolidationWorker', () => {
     expect(() => resolveConsolidationWorkerConfig({ maxTokens: 0 })).toThrow(/maxTokens/)
     expect(() => resolveConsolidationWorkerConfig({ timeoutMs: 1.5 })).toThrow(/timeoutMs/)
     expect(() => resolveConsolidationWorkerConfig({ maxInputBytes: 0 })).toThrow(/maxInputBytes/)
+  })
+})
+
+describe('SessionConsolidationWorker dedupe audit', () => {
+  it('records dedupe decisions to the debug log and stays silent when nothing merged', async () => {
+    const { input, consolidator, store } = await inputAndConsolidator()
+    await store.commitWorkspace({
+      scope: input.workspace.scope,
+      expectedRevision: input.workspace.revision,
+      changes: [{
+        action: 'put',
+        record: {
+          name: 'verification-rule',
+          description: 'Use focused verification, full record.',
+          type: 'feedback',
+          content: 'Run the smallest relevant automated checks, then record the result with the command output.',
+        },
+      }],
+    })
+    const view = await store.readWorkspace(input.workspace.scope)
+    const refreshedInput: SessionConsolidationInput = {
+      ...input,
+      workspace: { scope: input.workspace.scope, ...view },
+    }
+
+    const debugRoot = mkdtempSync(join(tmpdir(), 'dsh-memory-worker-debug-'))
+    roots.push(debugRoot)
+    const debug = new ConsolidationDebugLog(debugRoot)
+    const workspaceStarter = {
+      async prepare() {
+        return { cwd: '/work/memory-consolidation', attachSession: async () => undefined }
+      },
+    }
+    const duplicateProposal = {
+      outcome: 'changes',
+      changes: [{
+        action: 'put',
+        record: {
+          name: 'verification-rule-notes',
+          description: 'Verification follow-up notes.',
+          type: 'feedback',
+          content: 'Run the smallest relevant automated checks and keep the notes.',
+        },
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      }],
+    }
+    const duplicateHost = new FakeWorkerHost({ kind: 'valid', proposal: duplicateProposal })
+    await new SessionConsolidationWorker(
+      consolidator,
+      duplicateHost.agents,
+      duplicateHost.sessions,
+      {},
+      debug,
+      workspaceStarter,
+      async () => 2048,
+    ).run(refreshedInput, 1)
+
+    const first = readFileSync(join(debugRoot, input.reviewId, 'attempt-1.jsonl'), 'utf8')
+    expect(first).toContain('"stage":"dedupe"')
+    expect(first).toContain('"kind":"merged-put"')
+
+    const siblingProposal = {
+      outcome: 'changes',
+      changes: [{
+        action: 'put',
+        record: {
+          name: 'niu-bash-executor',
+          description: 'bash executor switch.',
+          type: 'project',
+          content: 'dsh-ops 的 bash 执行器换成 niu.exe，受限模式只认 pinned MSYS',
+        },
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      }],
+    }
+    const siblingHost = new FakeWorkerHost({ kind: 'valid', proposal: siblingProposal })
+    await new SessionConsolidationWorker(
+      consolidator,
+      siblingHost.agents,
+      siblingHost.sessions,
+      {},
+      debug,
+      workspaceStarter,
+      async () => 2048,
+    ).run(refreshedInput, 2)
+    const second = readFileSync(join(debugRoot, input.reviewId, 'attempt-2.jsonl'), 'utf8')
+    expect(second).not.toContain('"stage":"dedupe"')
   })
 })

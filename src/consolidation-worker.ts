@@ -356,6 +356,9 @@ export class SessionConsolidationWorker {
         proposalCalls: submissions,
         changeCount: plan.proposal.changes.length,
       })
+      if (plan.dedupe !== undefined && plan.dedupe.length > 0) {
+        this.debug?.record(debugIdentity, 'dedupe', { events: plan.dedupe })
+      }
       return { workerSessionId, plan }
     } catch (error: unknown) {
       primaryFailure = error
