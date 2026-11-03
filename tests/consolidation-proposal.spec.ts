@@ -556,4 +556,29 @@ describe('consolidation temporal guard', () => {
     expect(planned.staleChanges).toEqual([{ index: 0, reason: 'stale-evidence' }])
     expect(planned.preview.records.map(entry => entry.name)).toEqual(['git-status'])
   })
+
+  it('keeps the newest stamp when a guarded put folds into a same-topic record', async () => {
+    const target = await temporalWorkspace({ name: 'git-status', content: 'Git 现在可用。\n', lastEvidenceTime: T9 })
+    const clocked = [
+      { fromSeq: 0, toSeq: 0, time: T9, user: ['git 可用，补充细节'], summaries: [], assistantFinal: null, tools: [] },
+    ]
+    const planned = parseConsolidationProposal({
+      outcome: 'changes',
+      changes: [{
+        action: 'put',
+        record: {
+          name: 'git-status-notes',
+          description: 'Git availability.',
+          type: 'project',
+          content: 'Git 现在可用。补充：走系统代理。\n',
+        },
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      }],
+    }, { sourceEvidence: clocked, global: await target.store.readGlobal(), workspace: target.view })
+
+    // 同题记录被合并：时间标取 max（T9），不会退回旧的或者丢标
+    const merged = planned.preview.records.find(entry => entry.name === 'git-status' || entry.name === 'git-status-notes')!
+    expect(merged.lastEvidenceTime).toBe(T9)
+    expect(merged.content).toContain('可用')
+  })
 })
