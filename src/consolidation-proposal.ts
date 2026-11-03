@@ -335,6 +335,12 @@ function intersectionOf(a: WorkspaceMemory, b: WorkspaceMemory): number {
 /** Longer content survives first; the absorbed body is demoted and appended. */
 function mergedContent(survivor: WorkspaceMemory, absorbed: WorkspaceMemory): string {
   if (absorbed.content.trim() === '') return survivor.content
+  // Absorbed content already fully contained in the survivor: folding is a
+  // no-op. Appending would double the record and compound across runs.
+  const absorbedChunks = textChunks(absorbed.content)
+  if (absorbedChunks.size > 0 && chunkIntersection(textChunks(survivor.content), absorbedChunks) === absorbedChunks.size) {
+    return survivor.content
+  }
   return `${survivor.content}\n\n${demoteHeadings(absorbed.content)}`
 }
 

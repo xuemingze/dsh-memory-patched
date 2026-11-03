@@ -289,6 +289,60 @@ describe('consolidation proposal dedupe', () => {
     expect(planned.preview.records.filter(record => record.name.includes('dsh-ops'))).toHaveLength(1)
   })
 
+  it('folds an exact-duplicate put without doubling the record content', async () => {
+    const target = await dedupeWorkspace()
+    const planned = parseConsolidationProposal({
+      outcome: 'changes',
+      changes: [
+        {
+          action: 'put',
+          record: {
+            name: 'dsh-ops-reinstall-note',
+            description: 'dsh-ops 插件重装记录。',
+            type: 'project',
+            content: 'dsh-ops 插件从 npm 华为云源重装 0.4.4，runtime 三件齐，受限沙箱可用。安装命令与验证步骤都已记录，bash 执行器路径覆盖已配置，回退只需删除 bashPath。',
+          },
+          evidence: [{ fromSeq: 0, toSeq: 0 }],
+        },
+        {
+          action: 'put',
+          record: {
+            name: 'niu-bash-executor',
+            description: 'bash 执行器切换记录。',
+            type: 'project',
+            content: 'dsh-ops 的 bash 执行器换成 niu.exe，受限模式只认 pinned MSYS',
+          },
+          evidence: [{ fromSeq: 0, toSeq: 0 }],
+        },
+      ],
+    }, { sourceEvidence: evidence, global: await target.store.readGlobal(), workspace: target.view })
+
+    expect(planned.proposal.outcome).toBe('changes')
+    const reinstall = planned.preview.records.find(record => record.name === 'dsh-ops-reinstall')
+    expect(reinstall?.content).toBe('dsh-ops 插件从 npm 华为云源重装 0.4.4，runtime 三件齐，受限沙箱可用。安装命令与验证步骤都已记录，bash 执行器路径覆盖已配置，回退只需删除 bashPath。\n')
+    expect(reinstall?.content).not.toContain('\n\n')
+    expect(planned.dedupe?.some(event => event.kind === 'merged-put')).toBe(true)
+  })
+
+  it('collapses a lone exact-duplicate put into a no-change plan', async () => {
+    const target = await dedupeWorkspace()
+    const planned = parseConsolidationProposal({
+      outcome: 'changes',
+      changes: [{
+        action: 'put',
+        record: {
+          name: 'dsh-ops-reinstall-note',
+          description: 'dsh-ops 插件重装记录。',
+          type: 'project',
+          content: 'dsh-ops 插件从 npm 华为云源重装 0.4.4，runtime 三件齐，受限沙箱可用。安装命令与验证步骤都已记录，bash 执行器路径覆盖已配置，回退只需删除 bashPath。',
+        },
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      }],
+    }, { sourceEvidence: evidence, global: await target.store.readGlobal(), workspace: target.view })
+    expect(planned.proposal.outcome).toBe('no-change')
+    expect(planned.preview.changed).toBe(false)
+  })
+
   it('leaves sibling records and plain updates untouched', async () => {
     const target = await dedupeWorkspace()
     const planned = parseConsolidationProposal({
