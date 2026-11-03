@@ -46,7 +46,7 @@ interface WorkspaceListResponse {
   workspaces: WorkspaceSummary[];
 }
 /** Deterministic reason why a persisted Session cannot be consolidated. */
-type SessionIneligibleReason = 'live' | 'missing-cwd' | 'workspace-unavailable' | 'unstable';
+type SessionIneligibleReason = 'live' | 'missing-cwd' | 'workspace-unavailable' | 'unstable' | 'subagent' | 'empty';
 type SessionReceiptState = 'committing' | 'committed' | 'no-change' | 'cancelled' | 'source-changed' | 'target-conflict' | 'invalid-proposal' | 'output-truncated' | 'provider-failed' | 'evidence-too-large' | 'internal-error';
 /** Browser-safe receipt status without model route, Workspace key, or revisions. */
 interface SessionReceiptSummary {
@@ -516,6 +516,10 @@ interface MemorySessionSnapshot {
     readonly id: string;
     readonly createdAt: number;
     readonly cwd?: string;
+    /** Present on newer Hosts: marks a Session spawned as a subagent. */
+    readonly origin?: 'subagent';
+    /** Present on newer Hosts: fork/delegation nesting depth. */
+    readonly delegationDepth?: number;
   };
   readonly revision: string;
 }

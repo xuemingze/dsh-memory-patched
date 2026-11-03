@@ -239,6 +239,26 @@ describe('Memory RPC protocol', () => {
       reason: 'workspace-unavailable',
       latestReceipt: null,
     }] })).toThrow(/both be null/)
+    expect(parseSessionListResponse({ available: true, sessions: [{
+      sessionId: 'session-sub',
+      title: null,
+      createdAt: 45,
+      workspaceId: WORKSPACE_ID,
+      workspaceName: 'dsh-memory',
+      eligible: false,
+      reason: 'subagent',
+      latestReceipt: null,
+    }] })).toMatchObject({ sessions: [{ sessionId: 'session-sub', reason: 'subagent' }] })
+    expect(parseSessionListResponse({ available: true, sessions: [{
+      sessionId: 'session-empty',
+      title: null,
+      createdAt: 46,
+      workspaceId: WORKSPACE_ID,
+      workspaceName: 'dsh-memory',
+      eligible: false,
+      reason: 'empty',
+      latestReceipt: null,
+    }] })).toMatchObject({ sessions: [{ sessionId: 'session-empty', reason: 'empty' }] })
     expect(() => parseSessionConsolidatePayload({ sessionId: 'session-1', cwd: '/private' })).toThrow(/exactly/)
     expect(() => parseSessionConsolidateResponse({
       status: 'committing',

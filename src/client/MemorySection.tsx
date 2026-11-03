@@ -974,6 +974,8 @@ function sessionReasonKey(reason: SessionIneligibleReason): MemoryLocaleKey {
     case 'missing-cwd': return 'sessionReasonMissingCwd'
     case 'workspace-unavailable': return 'sessionReasonWorkspaceUnavailable'
     case 'unstable': return 'sessionReasonUnstable'
+    case 'subagent': return 'sessionReasonSubagent'
+    case 'empty': return 'sessionReasonEmpty'
   }
 }
 

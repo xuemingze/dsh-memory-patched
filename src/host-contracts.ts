@@ -48,6 +48,10 @@ export interface MemorySessionSnapshot {
     readonly id: string
     readonly createdAt: number
     readonly cwd?: string
+    /** Present on newer Hosts: marks a Session spawned as a subagent. */
+    readonly origin?: 'subagent'
+    /** Present on newer Hosts: fork/delegation nesting depth. */
+    readonly delegationDepth?: number
   }
   readonly revision: string
 }

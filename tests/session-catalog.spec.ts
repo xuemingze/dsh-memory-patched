@@ -104,6 +104,85 @@ describe('Session candidate catalog', () => {
     })
   })
 
+  it('excludes subagent Sessions by header markers without loading events', async () => {
+    const memory = store()
+    const first = [
+      { header: { id: 'spawn-sub', createdAt: 3, cwd: '/work/project-alpha', origin: 'subagent' as const }, revision: 'source:a' },
+      { header: { id: 'fork-sub', createdAt: 2, cwd: '/work/project-alpha', delegationDepth: 1 }, revision: 'source:b' },
+      snapshot('normal', 'source:c', 1, '/work/project-alpha'),
+    ]
+    const catalog = new SessionCatalog(memory, {
+      async listSnapshots() { return first },
+    }, { get() { return undefined } })
+
+    await expect(catalog.list()).resolves.toMatchObject({ sessions: [
+      { sessionId: 'spawn-sub', eligible: false, reason: 'subagent' },
+      { sessionId: 'fork-sub', eligible: false, reason: 'subagent' },
+      { sessionId: 'normal', eligible: true },
+    ] })
+  })
+
+  it('probes event-light Sessions once per revision to drop empty shells', async () => {
+    const memory = store()
+    const target = snapshot('mystery', 'source:a', 1, '/work/project-alpha')
+    let probes = 0
+    const catalog = new SessionCatalog(memory, {
+      async listSnapshots() { return [target] },
+    }, { get() { return undefined } }, undefined, undefined, undefined, () => false, async () => {
+      probes += 1
+      return [
+        { seq: 0, type: 'session', data: {} },
+        { seq: 1, type: 'permission/preset', data: {} },
+        { seq: 2, type: 'sandbox/mode', data: {} },
+        { seq: 3, type: 'approval/policy', data: {} },
+      ]
+    })
+
+    await expect(catalog.list()).resolves.toMatchObject({ sessions: [
+      { sessionId: 'mystery', eligible: false, reason: 'empty' },
+    ] })
+    await expect(catalog.list()).resolves.toMatchObject({ sessions: [
+      { sessionId: 'mystery', eligible: false, reason: 'empty' },
+    ] })
+    expect(probes).toBe(1)
+  })
+
+  it('drops fork-injected subagents that the header cannot see and keeps probed real sessions', async () => {
+    const memory = store()
+    const forked = snapshot('forked-mid', 'source:a', 2, '/work/project-alpha')
+    const real = snapshot('real', 'source:b', 1, '/work/project-alpha')
+    const catalog = new SessionCatalog(memory, {
+      async listSnapshots() { return [forked, real] },
+    }, { get() { return undefined } }, undefined, undefined, undefined, () => false, async (id) => {
+      if (id === 'forked-mid') {
+        return [
+          { seq: 0, type: 'user/message', data: { source: { kind: 'user' }, content: 'start' } },
+          { seq: 1, type: 'subagent/descriptor', data: { label: 'Mnemon idle checkpoint review' } },
+        ]
+      }
+      return [
+        { seq: 0, type: 'user/message', data: { source: { kind: 'user' }, content: 'real work' } },
+      ]
+    })
+
+    await expect(catalog.list()).resolves.toMatchObject({ sessions: [
+      { sessionId: 'forked-mid', eligible: false, reason: 'subagent' },
+      { sessionId: 'real', eligible: true },
+    ] })
+  })
+
+  it('keeps Sessions when the probe is unavailable', async () => {
+    const memory = store()
+    const target = snapshot('mystery', 'source:a', 1, '/work/project-alpha')
+    const catalog = new SessionCatalog(memory, {
+      async listSnapshots() { return [target] },
+    }, { get() { return undefined } }, undefined, undefined, undefined, () => false, async () => undefined)
+
+    await expect(catalog.list()).resolves.toMatchObject({ sessions: [
+      { sessionId: 'mystery', eligible: true },
+    ] })
+  })
+
   it('reads live and cold titles from projection cuts without loading Session logs', async () => {
     const memory = store()
     const live = snapshot('live', 'source:a', 2, '/work/project-alpha')

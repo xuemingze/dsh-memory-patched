@@ -9,7 +9,7 @@ import type {
   MemorySessionSnapshot,
   MemorySessionSnapshotPersistence,
 } from './host-contracts.ts'
-import type { SessionListResponse, SessionSummary } from './protocol.ts'
+import type { SessionIneligibleReason, SessionListResponse, SessionSummary } from './protocol.ts'
 import { isConsolidationWorkerSessionId } from './consolidation-identity.ts'
 
 /** Builds a stable candidate list without loading complete Session event logs. */
@@ -25,7 +25,10 @@ export class SessionCatalog {
     } = () => ({}),
     private readonly excludeCwd: (cwd: string | undefined) => boolean = () => false,
     private readonly isArchived: (sessionId: string) => boolean = () => false,
+    private readonly probeEvents?: (sessionId: string) => Promise<readonly unknown[] | undefined>,
   ) {}
+
+  private readonly probeCache = new Map<string, SessionIneligibleReason | undefined>()
 
   /** Observe each snapshot twice and classify only unchanged, non-live Sessions as eligible. */
   async list(signal?: AbortSignal): Promise<SessionListResponse> {
@@ -41,6 +44,16 @@ export class SessionCatalog {
     const latestReceipts = this.receipts?.latestBySourceSessions(new Map(
       unique.map(snapshot => [snapshot.header.id, snapshot.revision]),
     ))
+    const probeReasons = new Map<string, SessionIneligibleReason | undefined>()
+    for (const snapshot of unique) {
+      if (headerSubagentMarker(snapshot.header) !== undefined) continue
+      if (latestReceipts?.has(snapshot.header.id)) {
+        // A probed verdict outlives its receipt: an empty Session stays empty after consolidation.
+        probeReasons.set(snapshot.header.id, this.probeCache.get(`${snapshot.header.id}@${snapshot.revision}`))
+        continue
+      }
+      probeReasons.set(snapshot.header.id, await this.probeSession(snapshot, signal))
+    }
     const sessions = unique
       .map(snapshot => this.classify(
         snapshot,
@@ -48,9 +61,33 @@ export class SessionCatalog {
         duplicateFirstIds,
         latestReceipts?.get(snapshot.header.id),
         this.readTitle(snapshot),
+        probeReasons.get(snapshot.header.id) ?? headerSubagentMarker(snapshot.header),
       ))
       .sort((left, right) => right.createdAt - left.createdAt || left.sessionId.localeCompare(right.sessionId, 'en'))
     return { available: true, sessions }
+  }
+
+  private async probeSession(
+    snapshot: MemorySessionSnapshot,
+    signal?: AbortSignal,
+  ): Promise<SessionIneligibleReason | undefined> {
+    if (this.probeEvents === undefined) return undefined
+    const key = `${snapshot.header.id}@${snapshot.revision}`
+    if (this.probeCache.has(key)) return this.probeCache.get(key)
+    let events: readonly unknown[] | undefined
+    try {
+      events = await this.probeEvents(snapshot.header.id)
+    } catch {
+      events = undefined
+    }
+    signal?.throwIfAborted()
+    let verdict: SessionIneligibleReason | undefined
+    if (events !== undefined) {
+      if (events.some(hasSubagentDescriptorEvent)) verdict = 'subagent'
+      else if (!events.some(isUserMessageEvent)) verdict = 'empty'
+    }
+    this.probeCache.set(key, verdict)
+    return verdict
   }
 
   private classify(
@@ -59,6 +96,7 @@ export class SessionCatalog {
     duplicateFirstIds: ReadonlySet<string>,
     latestReceipt?: ConsolidationReceipt,
     title: string | null = null,
+    probeReason?: SessionIneligibleReason,
   ): SessionSummary {
     const workspace = workspaceReference(this.store, snapshot.header.cwd)
     const base = {
@@ -78,6 +116,8 @@ export class SessionCatalog {
     }
 
     if (workspace === undefined) return { ...base, eligible: false, reason: 'workspace-unavailable' }
+
+    if (probeReason !== undefined) return { ...base, eligible: false, reason: probeReason }
 
     const matching = secondById.get(snapshot.header.id)
     if (duplicateFirstIds.has(snapshot.header.id)
@@ -137,6 +177,26 @@ function groupById(snapshots: readonly MemorySessionSnapshot[]): Map<string, Mem
     grouped.set(snapshot.header.id, values)
   }
   return grouped
+}
+
+function headerSubagentMarker(header: MemorySessionSnapshot['header']): SessionIneligibleReason | undefined {
+  if (header.origin === 'subagent') return 'subagent'
+  if (typeof header.delegationDepth === 'number' && header.delegationDepth > 0) return 'subagent'
+  return undefined
+}
+
+function hasSubagentDescriptorEvent(event: unknown): boolean {
+  return event !== null && typeof event === 'object' && !Array.isArray(event)
+    && (event as Record<string, unknown>).type === 'subagent/descriptor'
+}
+
+function isUserMessageEvent(event: unknown): boolean {
+  if (event === null || typeof event !== 'object' || Array.isArray(event)) return false
+  const record = event as Record<string, unknown>
+  if (record.type !== 'user/message') return false
+  const data = record.data
+  return data !== null && typeof data === 'object' && !Array.isArray(data)
+    && (data as Record<string, unknown>).source !== undefined
 }
 
 function duplicateIds(snapshots: readonly MemorySessionSnapshot[]): Set<string> {

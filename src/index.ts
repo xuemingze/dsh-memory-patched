@@ -164,9 +164,21 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   ctx.inject(['sessionPersistence', 'agents'], (sessionCtx) => {
     sessionCtx.effect(() => {
+      const rawPersistence = sessionCtx.sessionPersistence
+      const probeEvents = 'open' in rawPersistence && typeof rawPersistence.open === 'function'
+        ? async (id: string) => {
+            const handle = await rawPersistence.open(id, 'read', {})
+            try {
+              const { events } = await handle.read(0, 8, {})
+              return events
+            } finally {
+              await handle.close()
+            }
+          }
+        : undefined
       const catalog = new SessionCatalog(
         store,
-        adaptSessionPersistence(sessionCtx.sessionPersistence),
+        adaptSessionPersistence(rawPersistence),
         sessionCtx.agents,
         receipts,
         () => ({
@@ -175,6 +187,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         }),
         excludesConsolidationWorkspace,
         isArchivedSession,
+        probeEvents,
       )
       sessionCatalog = catalog
       return () => {

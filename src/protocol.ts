@@ -50,7 +50,7 @@ export interface WorkspaceListResponse {
 }
 
 /** Deterministic reason why a persisted Session cannot be consolidated. */
-export type SessionIneligibleReason = 'live' | 'missing-cwd' | 'workspace-unavailable' | 'unstable'
+export type SessionIneligibleReason = 'live' | 'missing-cwd' | 'workspace-unavailable' | 'unstable' | 'subagent' | 'empty'
 
 export type SessionReceiptState =
   | 'committing'
@@ -604,6 +604,7 @@ function requireWorkspaceMemoryName(value: unknown, label: string): string {
 
 function isSessionIneligibleReason(value: unknown): value is SessionIneligibleReason {
   return value === 'live' || value === 'missing-cwd' || value === 'workspace-unavailable' || value === 'unstable'
+    || value === 'subagent' || value === 'empty'
 }
 
 function isSessionReceiptState(value: unknown): value is SessionReceiptState {
