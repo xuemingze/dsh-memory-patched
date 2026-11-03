@@ -197,7 +197,7 @@ function applyTemporalGuard(
     const name = change.action === 'put' ? change.record.name : change.name
     const record = existing.get(name)
     const evidenceTime = evidenceTimeOf(change.evidence, input.sourceEvidence)
-    if (record !== undefined && evidenceTime < (record.lastEvidenceTime ?? 0)) {
+    if (record !== undefined && evidenceTime > 0 && evidenceTime < (record.lastEvidenceTime ?? 0)) {
       stale.push({ index, reason: 'stale-evidence' })
       return
     }
@@ -458,8 +458,13 @@ function applyDedupe(
       folded.push(put)
       continue
     }
-    // Content ordering follows length; the surviving NAME follows the mode.
-    const contentSurvivorIsNew = put.record.content.length >= existing.content.length
+    // Time decides content first; length only breaks ties. An older absorbed
+    // record must never outweigh a newer surviving one just by being longer.
+    const putTime = put.record.lastEvidenceTime ?? 0
+    const existingTime = existing.lastEvidenceTime ?? 0
+    const contentSurvivorIsNew = putTime !== existingTime
+      ? putTime > existingTime
+      : put.record.content.length >= existing.content.length
     const nameSurvivorIsNew = mode === 'merge-delete' && contentSurvivorIsNew
     const contentSurvivor = contentSurvivorIsNew ? put.record : existing
     const contentAbsorbed = contentSurvivorIsNew ? existing : put.record

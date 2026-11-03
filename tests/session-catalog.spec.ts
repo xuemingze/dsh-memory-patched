@@ -122,6 +122,43 @@ describe('Session candidate catalog', () => {
     ] })
   })
 
+  it('does not mistake a real Session prefix for an empty shell', async () => {
+    const memory = store()
+    const target = snapshot('realish', 'source:a', 1, '/work/project-alpha')
+    const prefix = [
+      { seq: 0, type: 'session', data: {} },
+      { seq: 1, type: 'permission/preset', data: {} },
+      { seq: 2, type: 'sandbox/mode', data: {} },
+      { seq: 3, type: 'approval/policy', data: {} },
+      { seq: 4, type: 'agent/inbox/spliced', data: {} },
+      { seq: 5, type: 'turn/start', data: {} },
+      { seq: 6, type: 'agent/inbox/spliced', data: {} },
+      { seq: 7, type: 'step/start', data: {} },
+      { seq: 8, type: 'system/message', data: {} },
+      { seq: 9, type: 'user/message', data: { source: { kind: 'user' }, content: 'real ask' } },
+    ]
+    const catalog = new SessionCatalog(memory, {
+      async listSnapshots() { return [target] },
+    }, { get() { return undefined } }, undefined, undefined, undefined, () => false, async () => prefix.slice(0, 8))
+
+    await expect(catalog.list()).resolves.toMatchObject({ sessions: [
+      { sessionId: 'realish', eligible: true },
+    ] })
+  })
+
+  it('fails open when the probe window is saturated without a message', async () => {
+    const memory = store()
+    const target = snapshot('saturated', 'source:a', 1, '/work/project-alpha')
+    const saturated = Array.from({ length: 32 }, (_, seq) => ({ seq, type: 'step/start', data: {} }))
+    const catalog = new SessionCatalog(memory, {
+      async listSnapshots() { return [target] },
+    }, { get() { return undefined } }, undefined, undefined, undefined, () => false, async () => saturated)
+
+    await expect(catalog.list()).resolves.toMatchObject({ sessions: [
+      { sessionId: 'saturated', eligible: true },
+    ] })
+  })
+
   it('probes event-light Sessions once per revision to drop empty shells', async () => {
     const memory = store()
     const target = snapshot('mystery', 'source:a', 1, '/work/project-alpha')
@@ -138,12 +175,8 @@ describe('Session candidate catalog', () => {
       ]
     })
 
-    await expect(catalog.list()).resolves.toMatchObject({ sessions: [
-      { sessionId: 'mystery', eligible: false, reason: 'empty' },
-    ] })
-    await expect(catalog.list()).resolves.toMatchObject({ sessions: [
-      { sessionId: 'mystery', eligible: false, reason: 'empty' },
-    ] })
+    await expect(catalog.list()).resolves.toMatchObject({ sessions: [] })
+    await expect(catalog.list()).resolves.toMatchObject({ sessions: [] })
     expect(probes).toBe(1)
   })
 

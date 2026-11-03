@@ -10,6 +10,8 @@ import {
   ConsolidationProviderError,
   SessionConsolidationWorker,
   WORKER_RULES,
+  sessionEventRows,
+  workerOutputWasTruncated,
   renderConsolidationWorkerInput,
   resolveConsolidationWorkerConfig,
   type ConsolidationWorkerAgents,
@@ -203,6 +205,24 @@ const validProposal = {
 }
 
 describe('SessionConsolidationWorker', () => {
+  it('reads Session rows from array, list, and iterator containers', () => {
+    const rows = [{ type: 'turn/end', data: { reason: { kind: 'max-tokens' } } }]
+    expect(sessionEventRows({ events: rows })).toEqual(rows)
+    expect(sessionEventRows({ events: { list: rows } })).toEqual(rows)
+    expect(sessionEventRows({ events: { toArray: () => rows } })).toEqual(rows)
+    expect(sessionEventRows({ events: (function* () { yield* rows })() })).toEqual(rows)
+    expect(sessionEventRows({ events: { toArray: () => { throw new Error('boom') } } })).toBeUndefined()
+    expect(sessionEventRows({})).toBeUndefined()
+    expect(workerOutputWasTruncated(sessionEventRows({ events: rows }))).toBe(true)
+  })
+
+  it('treats a non-array session event list as untruncated instead of throwing', () => {
+    expect(workerOutputWasTruncated(undefined)).toBe(false)
+    expect(workerOutputWasTruncated({})).toBe(false)
+    expect(workerOutputWasTruncated('events')).toBe(false)
+    expect(workerOutputWasTruncated([null, { type: 'turn/end', data: { reason: { kind: 'max-tokens' } } }])).toBe(true)
+  })
+
   it('instructs the worker to resolve temporal conflicts toward the newer fact', () => {
     expect(WORKER_RULES).toContain('"time"')
     expect(WORKER_RULES).toContain('newer')
@@ -240,7 +260,13 @@ describe('SessionConsolidationWorker', () => {
     expect(host.modelRequests).toBe(1)
     expect(host.createOptions).toMatchObject([{
       meta: { cwd: '/work/memory-consolidation' },
-      agentOptions: { provider: 'deepseek-official', model: 'deepseek-v4-flash', maxTokens: 2048 },
+      agentOptions: {
+        provider: 'deepseek-official',
+        model: 'deepseek-v4-flash',
+        maxTokens: 2048,
+        // Reasoning tokens count against maxTokens: the worker must always ask for reasoning off.
+        reasoningEffort: 'off',
+      },
     }])
     expect(host.suppressedRuntimeContext).toBe(1)
     expect(host.sections).toMatchObject([{ name: 'dsh-memory:consolidator', complete: true }])

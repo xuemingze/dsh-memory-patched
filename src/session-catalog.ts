@@ -63,6 +63,8 @@ export class SessionCatalog {
         this.readTitle(snapshot),
         probeReasons.get(snapshot.header.id) ?? headerSubagentMarker(snapshot.header),
       ))
+      // Empty shells are noise, not candidates: keep them out of the list entirely.
+      .filter(session => session.reason !== 'empty')
       .sort((left, right) => right.createdAt - left.createdAt || left.sessionId.localeCompare(right.sessionId, 'en'))
     return { available: true, sessions }
   }
@@ -84,8 +86,14 @@ export class SessionCatalog {
     let verdict: SessionIneligibleReason | undefined
     if (events !== undefined) {
       if (events.some(hasSubagentDescriptorEvent)) verdict = 'subagent'
-      else if (!events.some(isUserMessageEvent)) verdict = 'empty'
+      // A real Session opens with lifecycle and runtime events long before its first
+      // user turn, so an empty-shell verdict needs both markers absent AND the window
+      // to end before the limit; a saturated window proves nothing either way.
+      else if (events.length < PROBE_EVENT_WINDOW
+        && !events.some(isUserMessageEvent)
+        && !events.some(isTurnStartEvent)) verdict = 'empty'
     }
+    if (this.probeCache.size >= PROBE_CACHE_LIMIT) this.probeCache.clear()
     this.probeCache.set(key, verdict)
     return verdict
   }
@@ -198,6 +206,15 @@ function isUserMessageEvent(event: unknown): boolean {
   return data !== null && typeof data === 'object' && !Array.isArray(data)
     && (data as Record<string, unknown>).source !== undefined
 }
+
+function isTurnStartEvent(event: unknown): boolean {
+  return event !== null && typeof event === 'object' && !Array.isArray(event)
+    && (event as Record<string, unknown>).type === 'turn/start'
+}
+
+/** Real Sessions place their first user turn at index 9-18, so the window must clear that. */
+const PROBE_EVENT_WINDOW = 32
+const PROBE_CACHE_LIMIT = 4_096
 
 function duplicateIds(snapshots: readonly MemorySessionSnapshot[]): Set<string> {
   return new Set([...groupById(snapshots)].filter(([, values]) => values.length !== 1).map(([id]) => id))

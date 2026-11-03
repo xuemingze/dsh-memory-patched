@@ -169,7 +169,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         ? async (id: string) => {
             const handle = await rawPersistence.open(id, 'read', {})
             try {
-              const { events } = await handle.read(0, 8, {})
+              const { events } = await handle.read(0, 32, {})
               return events
             } finally {
               await handle.close()

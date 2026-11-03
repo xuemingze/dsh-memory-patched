@@ -177,14 +177,17 @@ describe('Host Cordis composition', () => {
       changes: [{ action: 'delete', name: 'missing-record' }],
     }, signal)).toMatchObject({ ok: false, error: { code: 'bad-request' } })
     const probed = api === 'handles'
+    // Probed-empty shells never reach the list; only the legacy (non-probing) view shows them.
     expect(await rpcHandler?.('sessions/list', {}, signal)).toMatchObject({
       ok: true,
       value: {
         available: true,
-        sessions: [
-          { sessionId: 'session-eligible', title: 'Eligible memory review', eligible: !probed, reason: probed ? 'empty' : null, archived: false },
+        sessions: probed ? [
           { sessionId: 'session-live', title: 'Live memory review', eligible: false, reason: 'live', archived: false },
-          { sessionId: 'session-archived', eligible: !probed, reason: probed ? 'empty' : null, archived: true },
+        ] : [
+          { sessionId: 'session-eligible', title: 'Eligible memory review', eligible: true, reason: null, archived: false },
+          { sessionId: 'session-live', title: 'Live memory review', eligible: false, reason: 'live', archived: false },
+          { sessionId: 'session-archived', eligible: true, reason: null, archived: true },
         ],
       },
     })
@@ -219,10 +222,12 @@ describe('Host Cordis composition', () => {
     expect(closed).toBe(opened)
     expect(await rpcHandler?.('sessions/list', {}, signal)).toMatchObject({
       ok: true,
-      value: { sessions: [
-        { sessionId: 'session-eligible', latestReceipt: { state: 'no-change', current: true }, reason: probed ? 'empty' : null },
+      value: { sessions: probed ? [
         { sessionId: 'session-live', latestReceipt: null },
-        { sessionId: 'session-archived', latestReceipt: { state: 'no-change', current: true }, archived: true, reason: probed ? 'empty' : null },
+      ] : [
+        { sessionId: 'session-eligible', latestReceipt: { state: 'no-change', current: true }, reason: null },
+        { sessionId: 'session-live', latestReceipt: null },
+        { sessionId: 'session-archived', latestReceipt: { state: 'no-change', current: true }, archived: true, reason: null },
       ] },
     })
     expect(await rpcHandler?.('workspace/read', { workspaceId, cwd: '/work/plugin-rpc' }, signal))

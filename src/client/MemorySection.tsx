@@ -736,6 +736,9 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
                             <strong style={memorySectionStyles.sessionTitle}>{session.title ?? t('sessionUntitled')}</strong>
                             <small style={{ ...memorySectionStyles.sessionId, ...memorySectionStyles.muted }}>{session.sessionId}</small>
                           </div>
+                          {session.archived
+                            ? <span style={memorySectionStyles.ineligibleBadge}>{t('sessionArchived')}</span>
+                            : null}
                           <span style={sessionIsConsolidated(session)
                             ? memorySectionStyles.consolidatedBadge
                             : session.eligible

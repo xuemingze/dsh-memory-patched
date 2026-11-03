@@ -105,6 +105,9 @@ export class SessionConsolidationRunner {
         if (produced.workerSessionId !== workerSessionId) {
           throw new SessionConsolidationRunError('worker-mismatch', 'worker returned an unexpected Session id')
         }
+        if (produced.plan.staleChanges !== undefined) {
+          this.debug?.record(debugIdentity, 'temporal-guard', { stale: produced.plan.staleChanges })
+        }
         try {
           return await this.commits.commitWithinReviewLock({
             input,

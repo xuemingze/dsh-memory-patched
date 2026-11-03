@@ -651,6 +651,8 @@ interface ConsolidationWorkerConfig {
   readonly maxTokens: number;
   readonly timeoutMs: number;
   readonly maxInputBytes: number;
+  /** Reasoning tokens count against maxTokens, so the worker runs with reasoning off by default. */
+  readonly reasoningEffort?: string;
 }
 /** Minimal Agent-scoped Host capabilities used during unpublished setup. */
 type ConsolidationPreStepListener = (payload: {
@@ -716,6 +718,7 @@ interface ConsolidationWorkerAgents {
       provider: string;
       model: string;
       maxTokens: number;
+      reasoningEffort?: string;
     };
     readonly signal?: AbortSignal;
     readonly setup: (context: ConsolidationWorkerScope) => void;

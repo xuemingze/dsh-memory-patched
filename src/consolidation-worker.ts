@@ -20,6 +20,8 @@ export interface ConsolidationWorkerConfig {
   readonly maxTokens: number
   readonly timeoutMs: number
   readonly maxInputBytes: number
+  /** Reasoning tokens count against maxTokens, so the worker runs with reasoning off by default. */
+  readonly reasoningEffort?: string
 }
 
 export const DEFAULT_CONSOLIDATION_WORKER_CONFIG: ConsolidationWorkerConfig = {
@@ -28,6 +30,7 @@ export const DEFAULT_CONSOLIDATION_WORKER_CONFIG: ConsolidationWorkerConfig = {
   maxTokens: 8_192,
   timeoutMs: 120_000,
   maxInputBytes: 131_072,
+  reasoningEffort: 'off',
 }
 
 /** Minimal Agent-scoped Host capabilities used during unpublished setup. */
@@ -70,7 +73,7 @@ export interface ConsolidationWorkerAgents {
   create(options: {
     readonly sessionId: DshSessionId
     readonly meta: { readonly cwd: string }
-    readonly agentOptions: { provider: string; model: string; maxTokens: number }
+    readonly agentOptions: { provider: string; model: string; maxTokens: number; reasoningEffort?: string }
     readonly signal?: AbortSignal
     readonly setup: (context: ConsolidationWorkerScope) => void
   }): Promise<ConsolidationWorkerHandle>
@@ -146,8 +149,31 @@ Use replace-global for a complete Global document, put to create or fully replac
 
 const WORKER_TASK = 'Submit the consolidation proposal now.'
 
+/** Extract Session rows from either a plain array or a newer Host container shape. */
+export function sessionEventRows(session: unknown): readonly unknown[] | undefined {
+  if (session === null || typeof session !== 'object') return undefined
+  const events = (session as { events?: unknown }).events
+  if (Array.isArray(events)) return events
+  if (events === null || typeof events !== 'object') return undefined
+  const container = events as { toArray?: () => unknown; list?: unknown; [Symbol.iterator]?: () => Iterator<unknown> }
+  try {
+    if (typeof container.toArray === 'function') {
+      const rows = container.toArray()
+      return Array.isArray(rows) ? rows : undefined
+    }
+    if (Array.isArray(container.list)) return container.list
+    if (typeof container[Symbol.iterator] === 'function') return [...events as Iterable<unknown>]
+  } catch {
+    return undefined
+  }
+  return undefined
+}
+
 /** Duck-typed scan of worker Session rows for a turn ended by the output token limit. */
-function workerOutputWasTruncated(events: readonly unknown[]): boolean {
+export function workerOutputWasTruncated(events: unknown): boolean {
+  // Newer Hosts expose the Session handle differently; an unreadable event list
+  // must read as "not truncated" instead of throwing out of the worker run.
+  if (!Array.isArray(events)) return false
   for (const event of events) {
     if (typeof event !== 'object' || event === null) continue
     const row = event as { type?: unknown; data?: unknown }
@@ -279,6 +305,7 @@ export class SessionConsolidationWorker {
           provider: config.provider,
           model: config.model,
           maxTokens,
+          ...(config.reasoningEffort === undefined ? {} : { reasoningEffort: config.reasoningEffort }),
         },
         signal: operationSignal,
         setup: (agentCtx) => {
@@ -340,7 +367,7 @@ export class SessionConsolidationWorker {
         throw new ConsolidationProviderError('consolidation Agent failed during its model turn', { cause: agentFailure })
       }
       if (plan === undefined) {
-        if (workerOutputWasTruncated(handle.agent.session.events)) {
+        if (workerOutputWasTruncated(sessionEventRows(handle.agent.session))) {
           this.debug?.record(debugIdentity, 'worker-output-truncated', {
             effectiveMaxTokens: maxTokens,
           })
