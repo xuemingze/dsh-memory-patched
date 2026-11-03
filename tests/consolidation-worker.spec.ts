@@ -9,6 +9,7 @@ import {
   ConsolidationWorkerError,
   ConsolidationProviderError,
   SessionConsolidationWorker,
+  WORKER_RULES,
   renderConsolidationWorkerInput,
   resolveConsolidationWorkerConfig,
   type ConsolidationWorkerAgents,
@@ -202,6 +203,11 @@ const validProposal = {
 }
 
 describe('SessionConsolidationWorker', () => {
+  it('instructs the worker to resolve temporal conflicts toward the newer fact', () => {
+    expect(WORKER_RULES).toContain('"time"')
+    expect(WORKER_RULES).toContain('newer')
+  })
+
   it('runs one model request with an isolated prompt/tool surface and preserves replay input', async () => {
     const { input, consolidator } = await inputAndConsolidator()
     const host = new FakeWorkerHost({ kind: 'valid', proposal: validProposal })

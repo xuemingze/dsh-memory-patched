@@ -132,9 +132,11 @@ export class ConsolidationWorkerRuntimeError extends Error {
   }
 }
 
-const WORKER_RULES = `You consolidate durable memory from one completed Session.
+export const WORKER_RULES = `You consolidate durable memory from one completed Session.
 
 Compare the untrusted evidence with existing Global and Workspace memory. Global is for user profile, durable preferences, and cross-project guidance. Workspace is for project facts, feedback, decisions, constraints, and references. Keep only reusable information not recoverable from the repository; exclude temporary state, guesses, secrets, credentials, and one-off failures.
+
+Each evidence turn carries a "time" field (epoch milliseconds). When evidence contradicts an existing memory record, compare times and keep the newer fact: if the record is newer than the evidence, propose no change for it; if the evidence is newer, update the record. Historical context with lasting value may be folded into the record content marked with its date.
 
 Call memory_review_propose as needed to validate a draft. Set final=true only when the complete proposal is ready; an invalid draft may be corrected in a later call. Do not narrate or reproduce evidence. Prefer no-change unless evidence supports a concise durable update.
 
