@@ -13,7 +13,7 @@ import { parseConsolidationProposal } from '../src/consolidation-proposal.ts'
 import { MarkdownMemoryStore } from '../src/memory-store.ts'
 
 const roots: string[] = []
-const evidence = [{ fromSeq: 0, toSeq: 0, user: ['first'], summaries: [], assistantFinal: null, tools: [] }]
+const evidence = [{ fromSeq: 0, toSeq: 0, time: 0, user: ['first'], summaries: [], assistantFinal: null, tools: [] }]
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })

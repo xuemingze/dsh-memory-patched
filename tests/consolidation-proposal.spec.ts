@@ -11,9 +11,9 @@ import { MarkdownMemoryStore, type WorkspaceMemoryView } from '../src/memory-sto
 
 const roots: string[] = []
 const evidence = [
-  { fromSeq: 0, toSeq: 0, user: ['first'], summaries: [], assistantFinal: null, tools: [] },
-  { fromSeq: 1, toSeq: 1, user: ['second'], summaries: [], assistantFinal: null, tools: [] },
-  { fromSeq: 2, toSeq: 3, user: ['third'], summaries: [], assistantFinal: null, tools: [] },
+  { fromSeq: 0, toSeq: 0, time: 0, user: ['first'], summaries: [], assistantFinal: null, tools: [] },
+  { fromSeq: 1, toSeq: 1, time: 0, user: ['second'], summaries: [], assistantFinal: null, tools: [] },
+  { fromSeq: 2, toSeq: 3, time: 0, user: ['third'], summaries: [], assistantFinal: null, tools: [] },
 ]
 
 afterEach(() => {

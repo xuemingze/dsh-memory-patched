@@ -124,6 +124,7 @@ function inputEvidence(events: readonly unknown[]): SessionConsolidationInput['s
   return events.length === 0 ? [] : [{
     fromSeq: 0,
     toSeq: events.length - 1,
+    time: 0,
     user: ['Remember focused verification.'],
     summaries: [],
     assistantFinal: null,

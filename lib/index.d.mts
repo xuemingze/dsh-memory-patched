@@ -189,6 +189,8 @@ interface WorkspaceMemory {
   readonly description: string;
   readonly type: WorkspaceMemoryType;
   readonly content: string;
+  /** Epoch ms of the newest consolidated evidence that produced this record. */
+  readonly lastEvidenceTime?: number;
 }
 /** Complete Workspace view and its derived index. */
 interface WorkspaceMemoryView {
@@ -308,6 +310,7 @@ interface ConsolidationEvidenceTool {
 interface ConsolidationEvidenceTurn {
   readonly fromSeq: number;
   readonly toSeq: number;
+  readonly time: number;
   readonly user: readonly string[];
   readonly summaries: readonly string[];
   readonly assistantFinal: string | null;
@@ -584,7 +587,7 @@ declare module '@deepseek-ai/cordis' {
 //#region src/session-consolidator.d.ts
 /** Versioned semantics included in every deterministic review identity. */
 declare const CONSOLIDATOR_VERSION = "m3-multistep-global-v5";
-type SessionConsolidationErrorCode = 'not-found' | 'ambiguous' | 'live' | 'archived' | 'missing-cwd' | 'workspace-unavailable' | 'unstable' | 'inspection-mismatch';
+type SessionConsolidationErrorCode = 'not-found' | 'ambiguous' | 'live' | 'archived' | 'subagent' | 'missing-cwd' | 'workspace-unavailable' | 'unstable' | 'inspection-mismatch';
 /** Closed preparation failure vocabulary used by Host orchestration and receipts. */
 declare class SessionConsolidationError extends Error {
   readonly code: SessionConsolidationErrorCode;

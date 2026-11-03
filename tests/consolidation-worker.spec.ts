@@ -170,6 +170,7 @@ async function inputAndConsolidator(): Promise<{
       evidence: [{
         fromSeq: 0,
         toSeq: 0,
+        time: 0,
         user: ['Remember the verification rule.'],
         summaries: [],
         assistantFinal: null,
