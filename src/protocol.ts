@@ -36,6 +36,8 @@ export interface WorkspaceRecordView {
   description: string
   type: 'feedback' | 'project' | 'reference'
   content: string
+  /** Present when the record carries a store-authored temporal stamp. */
+  lastEvidenceTime?: number
 }
 
 /** Complete read-only Workspace projection returned to the Browser. */
@@ -323,7 +325,7 @@ export function parseWorkspaceReadResponse(value: unknown): WorkspaceReadRespons
   const summary = parseWorkspaceSummaryFields(record, 'workspace read response')
   if (typeof record.index !== 'string') throw new TypeError('workspace read response.index must be a string')
   if (!Array.isArray(record.records)) throw new TypeError('workspace read response.records must be an array')
-  const records = record.records.map((entry, index) => parseWorkspaceRecord(entry, `workspace read response.records[${index}]`))
+  const records = record.records.map((entry, index) => parseWorkspaceRecord(entry, `workspace read response.records[${index}]`, true))
   if (records.length !== summary.recordCount) {
     throw new TypeError('workspace read response.recordCount must match records length')
   }
@@ -535,9 +537,12 @@ function parseWorkspaceSummaryFields(record: Record<string, unknown>, label: str
   }
 }
 
-function parseWorkspaceRecord(value: unknown, label: string): WorkspaceRecordView {
+function parseWorkspaceRecord(value: unknown, label: string, allowLastEvidenceTime = false): WorkspaceRecordView {
   const record = requireRecord(value, label)
-  requireExactKeys(record, ['name', 'description', 'type', 'content'], label)
+  const keys = allowLastEvidenceTime && record.lastEvidenceTime !== undefined
+    ? ['name', 'description', 'type', 'content', 'lastEvidenceTime']
+    : ['name', 'description', 'type', 'content']
+  requireExactKeys(record, keys, label)
   const name = requireWorkspaceMemoryName(record.name, `${label}.name`)
   const description = requireNonEmptySingleLine(record.description, `${label}.description`)
   if (record.type !== 'feedback' && record.type !== 'project' && record.type !== 'reference') {
@@ -546,7 +551,17 @@ function parseWorkspaceRecord(value: unknown, label: string): WorkspaceRecordVie
   if (typeof record.content !== 'string' || record.content.trim() === '') {
     throw new TypeError(`${label}.content must be a non-empty string`)
   }
-  return { name, description, type: record.type, content: record.content }
+  // The stamp is store-authored: callers may read it, but only the read endpoint accepts it.
+  const stamp = record.lastEvidenceTime
+  return {
+    name,
+    description,
+    type: record.type,
+    content: record.content,
+    ...(allowLastEvidenceTime && typeof stamp === 'number' && Number.isFinite(stamp)
+      ? { lastEvidenceTime: stamp }
+      : {}),
+  }
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -595,9 +610,14 @@ function requireNonEmptyString(value: unknown, label: string): string {
   return value
 }
 
+const RESERVED_WORKSPACE_MEMORY_NAME = 'memory'
+
 function requireWorkspaceMemoryName(value: unknown, label: string): string {
   if (typeof value !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(value)) {
     throw new TypeError(`${label} must be a kebab-case Workspace memory name`)
+  }
+  if (value.toLowerCase() === RESERVED_WORKSPACE_MEMORY_NAME) {
+    throw new TypeError(`${label} cannot use the reserved name "${RESERVED_WORKSPACE_MEMORY_NAME}"`)
   }
   return value
 }

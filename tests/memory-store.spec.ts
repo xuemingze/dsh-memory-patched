@@ -313,6 +313,32 @@ describe('MarkdownMemoryStore', () => {
     expect(raw).toContain('lastEvidenceTime: 1790000000000')
     const unstampedRaw = readFileSync(join(scope.directory, 'unstamped.md'), 'utf8')
     expect(unstampedRaw).not.toContain('lastEvidenceTime')
+
+    // Preserves lastEvidenceTime when a later Browser/Tool update omits it,
+    // and detects a stamp-only update on an previously unstamped record.
+    const preserved = await memory.commitWorkspace({
+      scope,
+      expectedRevision: view.revision,
+      changes: [
+        { action: 'put', record: {
+          name: 'stamped',
+          description: 'Updated via Browser without lastEvidenceTime.',
+          type: 'project',
+          content: 'Git works now.\n',
+        } },
+        { action: 'put', record: {
+          name: 'unstamped',
+          description: 'No timestamp yet.',
+          type: 'project',
+          content: 'Legacy record.\n',
+          lastEvidenceTime: 1_800_000_000_000,
+        } },
+      ],
+    })
+    expect(preserved.revision).not.toBe(view.revision)
+    const afterEdit = await memory.readWorkspace(scope)
+    expect(afterEdit.records.find(r => r.name === 'stamped')?.lastEvidenceTime).toBe(1_790_000_000_000)
+    expect(afterEdit.records.find(r => r.name === 'unstamped')?.lastEvidenceTime).toBe(1_800_000_000_000)
   })
 
   it('deletes a record as one revision-checked Workspace generation', async () => {

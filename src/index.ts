@@ -166,10 +166,11 @@ export function apply(ctx: Context, config: Config = {}): void {
     sessionCtx.effect(() => {
       const rawPersistence = sessionCtx.sessionPersistence
       const probeEvents = 'open' in rawPersistence && typeof rawPersistence.open === 'function'
-        ? async (id: string) => {
-            const handle = await rawPersistence.open(id, 'read', {})
+        ? async (id: string, signal?: AbortSignal) => {
+            const options = signal === undefined ? {} : { signal }
+            const handle = await rawPersistence.open(id, 'read', options)
             try {
-              const { events } = await handle.read(0, 32, {})
+              const { events } = await handle.read(0, 32, options)
               return events
             } finally {
               await handle.close()

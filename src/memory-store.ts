@@ -11,6 +11,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
+import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { parse, stringify } from 'yaml'
@@ -248,7 +249,7 @@ export class MarkdownMemoryStore extends Service {
       revision: view.revision,
       recordCount: view.records.length,
       index: view.index,
-      records: view.records.map(record => ({ ...record })),
+      records: view.records.map(record => ({ name: record.name, description: record.description, type: record.type, content: record.content })),
     }
   }
 
@@ -426,7 +427,11 @@ export function previewWorkspaceChanges(
   }
   for (const change of changes) {
     if (change.action === 'put') {
-      next.set(change.record.name, normalizeWorkspaceRecord(change.record))
+      const prior = next.get(change.record.name)
+      const normalized = normalizeWorkspaceRecord(change.record)
+      next.set(change.record.name, normalized.lastEvidenceTime === undefined && prior?.lastEvidenceTime !== undefined
+        ? { ...normalized, lastEvidenceTime: prior.lastEvidenceTime }
+        : normalized)
     } else if (!next.delete(change.name)) {
       throw new MemoryValidationError(`workspace memory does not exist: ${change.name}`)
     }
@@ -501,7 +506,7 @@ function warnUnreadableRecord(path: string, error: unknown): void {
 export function defaultMemoryRoot(): string {
   const configured = process.env.DSH_HOME?.trim()
   const dshHome = configured === undefined || configured === ''
-    ? join(process.env.HOME ?? process.cwd(), '.dsh')
+    ? join(process.env.HOME ?? process.env.USERPROFILE ?? homedir(), '.dsh')
     : resolve(configured)
   return join(dshHome, 'memory')
 }
@@ -608,6 +613,7 @@ function sameWorkspaceRecords(left: readonly WorkspaceMemory[], right: readonly 
       && record.description === candidate.description
       && record.type === candidate.type
       && record.content === candidate.content
+      && record.lastEvidenceTime === candidate.lastEvidenceTime
   })
 }
 

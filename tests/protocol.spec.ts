@@ -66,6 +66,31 @@ describe('Memory RPC protocol', () => {
         content: 'Keep it local.\n',
       }],
     })).toMatchObject({ workspaceId: WORKSPACE_ID, recordCount: 1 })
+    expect(parseWorkspaceReadResponse({
+      workspaceId: WORKSPACE_ID,
+      displayName: 'dsh-memory',
+      revision: 'sha256:abc',
+      recordCount: 1,
+      index: '- [stamped](stamped.md)',
+      records: [{
+        name: 'stamped',
+        description: 'Carries a temporal stamp.',
+        type: 'project',
+        content: 'Git works now.\n',
+        lastEvidenceTime: 1_790_000_000_000,
+      }],
+    })).toMatchObject({ records: [{ name: 'stamped', lastEvidenceTime: 1_790_000_000_000 }] })
+    expect(() => parseWorkspaceCommitPayload({
+      workspaceId: WORKSPACE_ID,
+      expectedRevision: 'sha256:abc',
+      changes: [{ action: 'put', record: {
+        name: 'forged-stamp',
+        description: 'Must not be accepted from callers.',
+        type: 'project',
+        content: 'Forged.\n',
+        lastEvidenceTime: 1_790_000_000_000,
+      } }],
+    })).toThrow(/exactly/)
     expect(parseWorkspaceCommitPayload({
       workspaceId: WORKSPACE_ID,
       expectedRevision: 'sha256:abc',
@@ -206,6 +231,16 @@ describe('Memory RPC protocol', () => {
         content: 'Unsafe.\n',
       } }],
     })).toThrow(/kebab-case/)
+    expect(() => parseWorkspaceCommitPayload({
+      workspaceId: WORKSPACE_ID,
+      expectedRevision: 'sha256:abc',
+      changes: [{ action: 'put', record: {
+        name: 'memory',
+        description: 'Reserved index name.',
+        type: 'project',
+        content: 'Reserved.\n',
+      } }],
+    })).toThrow(/reserved/)
     expect(() => parseWorkspaceCommitResponse({ status: 'committed', revision: 'sha256:new', path: '/tmp' }))
       .toThrow(/exactly/)
     expect(() => parseSessionListResponse({ available: false, sessions: [{ sessionId: 'hidden' }] })).toThrow(/empty/)

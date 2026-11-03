@@ -5,7 +5,7 @@ const REDACTED = '[REDACTED]'
 const PEM_PRIVATE_KEY = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/gu
 const BEARER = /\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu
 const JSON_WEB_TOKEN = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}/gu
-const PREFIXED_SECRET = /(?:sk|key|token)-[A-Za-z0-9._-]{8,}/gu
+const PREFIXED_SECRET = /(?:sk|key|token)-[A-Za-z0-9._-]{8,}|\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})\b/gu
 /**
  * `key: value` / `"key": "value"` / `key=value` for common credential key names.
  * The optional quote capture is reused for both sides of the key so the

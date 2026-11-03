@@ -204,16 +204,25 @@ describe('Session candidate catalog', () => {
     ] })
   })
 
-  it('keeps Sessions when the probe is unavailable', async () => {
+  it('keeps Sessions when the probe is unavailable and retries on the next refresh', async () => {
     const memory = store()
     const target = snapshot('mystery', 'source:a', 1, '/work/project-alpha')
+    let attempts = 0
     const catalog = new SessionCatalog(memory, {
       async listSnapshots() { return [target] },
-    }, { get() { return undefined } }, undefined, undefined, undefined, () => false, async () => undefined)
+    }, { get() { return undefined } }, undefined, undefined, undefined, () => false, async (_id, signal) => {
+      expect(signal).toBeDefined()
+      attempts += 1
+      if (attempts === 1) throw new Error('transient I/O error')
+      return [{ seq: 0, type: 'session', data: {} }]
+    })
 
-    await expect(catalog.list()).resolves.toMatchObject({ sessions: [
+    const controller = new AbortController()
+    await expect(catalog.list(controller.signal)).resolves.toMatchObject({ sessions: [
       { sessionId: 'mystery', eligible: true },
     ] })
+    await expect(catalog.list(controller.signal)).resolves.toMatchObject({ sessions: [] })
+    expect(attempts).toBe(2)
   })
 
   it('reads live and cold titles from projection cuts without loading Session logs', async () => {

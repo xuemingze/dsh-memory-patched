@@ -169,7 +169,7 @@ export function buildWorkspaceChanges(
 export function workspaceDraftIssue(drafts: readonly WorkspaceDraftRecord[]): WorkspaceDraftIssue | undefined {
   const names = new Set<string>()
   for (const draft of drafts) {
-    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(draft.name)) return 'name'
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(draft.name) || draft.name.toLowerCase() === 'memory') return 'name'
     if (names.has(draft.name)) return 'duplicate-name'
     names.add(draft.name)
     if (draft.description.trim() === '' || /[\r\n]/u.test(draft.description)) return 'description'
@@ -263,7 +263,10 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
   useEffect(() => {
     const controller = new AbortController()
     void refresh(controller.signal)
-    return () => { controller.abort() }
+    return () => {
+      controller.abort()
+      tabRefreshController.current?.abort()
+    }
   }, [refresh])
 
   const save = async (): Promise<void> => {

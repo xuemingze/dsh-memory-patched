@@ -128,6 +128,8 @@ describe('consolidation evidence projection', () => {
       '"api_key": "super-secret-value"',
       'plain note mentioning token without a separator',
       jwt,
+      'ghp_1234567890abcdefghij1234567890abcdef',
+      'AKIAIOSFODNN7EXAMPLE',
       '-----BEGIN RSA PRIVATE KEY-----',
       'MIIEowIBAAKCAQEA',
       '-----END RSA PRIVATE KEY-----',
@@ -135,6 +137,8 @@ describe('consolidation evidence projection', () => {
     expect(text).toContain('"api_key": "[REDACTED]"')
     expect(text).not.toContain('super-secret-value')
     expect(text).not.toContain('eyJhbGciOiJIUzI1NiJ9')
+    expect(text).not.toContain('ghp_1234567890')
+    expect(text).not.toContain('AKIAIOSFODNN7EXAMPLE')
     expect(text).toContain('[REDACTED]')
     expect(text).not.toContain('MIIEowIBAAKCAQEA')
     expect(text).toContain('-----BEGIN PRIVATE KEY----- [REDACTED] -----END PRIVATE KEY-----')

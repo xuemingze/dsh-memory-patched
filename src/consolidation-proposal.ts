@@ -426,6 +426,17 @@ function longerDescription(a: WorkspaceMemory, b: WorkspaceMemory): string {
   return a.description.length >= b.description.length ? a.description : b.description
 }
 
+function mergeEvidenceRanges(
+  left: readonly ConsolidationEvidenceRange[],
+  right: readonly ConsolidationEvidenceRange[],
+): ConsolidationEvidenceRange[] {
+  const unique = new Map<string, ConsolidationEvidenceRange>()
+  for (const range of [...left, ...right]) {
+    unique.set(rangeKey(range.fromSeq, range.toSeq), range)
+  }
+  return [...unique.values()].sort((a, b) => a.fromSeq - b.fromSeq || a.toSeq - b.toSeq)
+}
+
 /**
  * Deterministic dedupe over a parsed proposal (alice-core's consolidation rules):
  * same-topic puts fold into one record, signpost sections are stripped from a
@@ -448,7 +459,7 @@ function applyDedupe(
 
   // Phase A: fold each put against same-topic records that already exist.
   const folded: PutChange[] = []
-  const pendingDeleteNames = new Set<string>()
+  const pendingDeletes = new Map<string, readonly ConsolidationEvidenceRange[]>()
   for (const put of puts) {
     const existing = input.workspace.records.find(record =>
       record.name !== put.record.name
@@ -479,7 +490,10 @@ function applyDedupe(
       },
       evidence: put.evidence,
     })
-    if (nameSurvivorIsNew) pendingDeleteNames.add(existing.name)
+    if (nameSurvivorIsNew) {
+      const prior = pendingDeletes.get(existing.name)
+      pendingDeletes.set(existing.name, prior === undefined ? put.evidence : mergeEvidenceRanges(prior, put.evidence))
+    }
     events.push({
       kind: 'merged-put',
       kept: nameSurvivorIsNew ? put.record.name : existing.name,
@@ -508,6 +522,7 @@ function applyDedupe(
           content: mergedContent(survivor, absorbed),
           ...mergedEvidenceTime(survivor, absorbed),
         },
+        evidence: mergeEvidenceRanges(twin.evidence, put.evidence),
       }
       events.push({ kind: 'merged-put', kept: twin.record.name, absorbed: put.record.name, intersection: intersectionOf(survivor, absorbed) })
       continue
@@ -530,6 +545,7 @@ function applyDedupe(
           content: mergedContent(survivor, absorbed),
           ...mergedEvidenceTime(survivor, absorbed),
         },
+        evidence: mergeEvidenceRanges(related.evidence, put.evidence),
       }
       events.push({ kind: 'merged-put', kept: keptName, absorbed: put.record.name, intersection: intersectionOf(survivor, absorbed) })
       continue
@@ -538,12 +554,12 @@ function applyDedupe(
   }
 
   // A synthesized delete is skipped when the batch itself puts onto that name.
-  const synthesizedDeletes: DeleteChange[] = [...pendingDeleteNames]
-    .filter(name => !finalPuts.some(put => put.record.name === name))
-    .map(name => ({
+  const synthesizedDeletes: DeleteChange[] = [...pendingDeletes.entries()]
+    .filter(([name]) => !finalPuts.some(put => put.record.name === name))
+    .map(([name, evidence]) => ({
       action: 'delete' as const,
       name,
-      evidence: puts.find(put => put.record.name !== name)!.evidence,
+      evidence,
     }))
 
   // Global replacement: strip signpost sections that duplicate a fuller section.

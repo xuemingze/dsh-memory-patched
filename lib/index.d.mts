@@ -35,6 +35,8 @@ interface WorkspaceRecordView {
   description: string;
   type: 'feedback' | 'project' | 'reference';
   content: string;
+  /** Present when the record carries a store-authored temporal stamp. */
+  lastEvidenceTime?: number;
 }
 /** Complete read-only Workspace projection returned to the Browser. */
 interface WorkspaceReadResponse extends WorkspaceSummary {

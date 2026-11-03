@@ -97,12 +97,15 @@ export function sanitizeConsolidationEvidenceText(value: string): string {
  * of the text is kept and the dropped byte count is recorded inline.
  */
 function capEvidenceText(text: string): string {
-  const total = Buffer.byteLength(text, 'utf8')
-  if (total <= MAX_EVIDENCE_TEXT_BYTES) return text
-  let cut = MAX_EVIDENCE_TEXT_BYTES
-  while (cut > 0 && Buffer.byteLength(text.slice(0, cut), 'utf8') > MAX_EVIDENCE_TEXT_BYTES) cut--
-  const kept = Buffer.byteLength(text.slice(0, cut), 'utf8')
-  return `${text.slice(0, cut)}\n[truncated ${total - kept} bytes]`
+  const raw = Buffer.from(text, 'utf8')
+  if (raw.byteLength <= MAX_EVIDENCE_TEXT_BYTES) return text
+  // Walk back from the byte ceiling to avoid splitting a multi-byte UTF-8 codepoint:
+  // UTF-8 continuation bytes always match 0b10xxxxxx (0x80..0xbf).
+  let cutBytes = MAX_EVIDENCE_TEXT_BYTES
+  while (cutBytes > 0 && (raw[cutBytes]! & 0xc0) === 0x80) cutBytes--
+  const head = raw.subarray(0, cutBytes).toString('utf8')
+  const kept = Buffer.byteLength(head, 'utf8')
+  return `${head}\n[truncated ${raw.byteLength - kept} bytes]`
 }
 
 function effectiveSurfaceNodes(events: readonly Record<string, unknown>[]): Set<number> {

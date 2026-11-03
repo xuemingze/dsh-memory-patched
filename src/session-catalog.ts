@@ -25,7 +25,7 @@ export class SessionCatalog {
     } = () => ({}),
     private readonly excludeCwd: (cwd: string | undefined) => boolean = () => false,
     private readonly isArchived: (sessionId: string) => boolean = () => false,
-    private readonly probeEvents?: (sessionId: string) => Promise<readonly unknown[] | undefined>,
+    private readonly probeEvents?: (sessionId: string, signal?: AbortSignal) => Promise<readonly unknown[] | undefined>,
   ) {}
 
   private readonly probeCache = new Map<string, SessionIneligibleReason | undefined>()
@@ -78,21 +78,23 @@ export class SessionCatalog {
     if (this.probeCache.has(key)) return this.probeCache.get(key)
     let events: readonly unknown[] | undefined
     try {
-      events = await this.probeEvents(snapshot.header.id)
+      events = await this.probeEvents(snapshot.header.id, signal)
     } catch {
+      signal?.throwIfAborted()
       events = undefined
     }
     signal?.throwIfAborted()
+    // If probeEvents failed/returned undefined, fail open for this call without
+    // permanently caching `undefined` so a transient read error can self-heal.
+    if (events === undefined) return undefined
     let verdict: SessionIneligibleReason | undefined
-    if (events !== undefined) {
-      if (events.some(hasSubagentDescriptorEvent)) verdict = 'subagent'
-      // A real Session opens with lifecycle and runtime events long before its first
-      // user turn, so an empty-shell verdict needs both markers absent AND the window
-      // to end before the limit; a saturated window proves nothing either way.
-      else if (events.length < PROBE_EVENT_WINDOW
-        && !events.some(isUserMessageEvent)
-        && !events.some(isTurnStartEvent)) verdict = 'empty'
-    }
+    if (events.some(hasSubagentDescriptorEvent)) verdict = 'subagent'
+    // A real Session opens with lifecycle and runtime events long before its first
+    // user turn, so an empty-shell verdict needs both markers absent AND the window
+    // to end before the limit; a saturated window proves nothing either way.
+    else if (events.length < PROBE_EVENT_WINDOW
+      && !events.some(isUserMessageEvent)
+      && !events.some(isTurnStartEvent)) verdict = 'empty'
     if (this.probeCache.size >= PROBE_CACHE_LIMIT) this.probeCache.clear()
     this.probeCache.set(key, verdict)
     return verdict

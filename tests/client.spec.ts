@@ -399,5 +399,6 @@ describe('Workspace draft batching', () => {
     expect(workspaceDraftIssue(untouched)).toBeUndefined()
     expect(workspaceDraftIssue([...untouched, { ...untouched[0]!, draftId: 'duplicate' }])).toBe('duplicate-name')
     expect(workspaceDraftIssue([{ ...untouched[0]!, name: '../escape' }])).toBe('name')
+    expect(workspaceDraftIssue([{ ...untouched[0]!, name: 'memory' }])).toBe('name')
   })
 })

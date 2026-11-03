@@ -439,7 +439,11 @@ describe('consolidation proposal dedupe', () => {
       dedupe: 'merge-delete',
     })
     expect(aggressive.proposal.changes.map(change => change.action)).toEqual(['delete', 'put'])
-    expect(aggressive.proposal.changes).toContainEqual(expect.objectContaining({ action: 'delete', name: 'dsh-ops-reinstall' }))
+    expect(aggressive.proposal.changes).toContainEqual(expect.objectContaining({
+      action: 'delete',
+      name: 'dsh-ops-reinstall',
+      evidence: [{ fromSeq: 0, toSeq: 0 }],
+    }))
     expect(aggressive.proposal.changes).toContainEqual(expect.objectContaining({ action: 'put', record: expect.objectContaining({ name: 'dsh-ops-reinstall-full' }) }))
     expect(aggressive.dedupe?.[0]).toMatchObject({ kind: 'merged-put', kept: 'dsh-ops-reinstall-full', absorbed: 'dsh-ops-reinstall' })
 

@@ -87,6 +87,10 @@ export class SessionConsolidator {
 
     const first = exactSnapshot(await this.persistence.listSnapshots(signal), sessionId)
     assertNotLive(this.agents, sessionId)
+    if (first.header.origin === 'subagent'
+      || (typeof first.header.delegationDepth === 'number' && first.header.delegationDepth > 0)) {
+      throw new SessionConsolidationError('subagent', `Session "${sessionId}" is a subagent Session`)
+    }
     const cwd = first.header.cwd
     if (cwd === undefined) {
       throw new SessionConsolidationError('missing-cwd', `Session "${sessionId}" has no Workspace cwd`)

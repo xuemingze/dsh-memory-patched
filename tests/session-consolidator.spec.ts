@@ -107,7 +107,17 @@ describe('SessionConsolidator input preparation', () => {
     expect(inspected).toBe(false)
   })
 
-  it('rejects a subagent Session after inspection', async () => {
+  it('rejects a subagent Session by header markers before loading events, and after inspection when unmarked', async () => {
+    let headerInspected = false
+    const byHeader = new SessionConsolidator(createStore(), {
+      async listSnapshots() {
+        return [{ header: { id: 'source-session', createdAt: 42, cwd: '/work/project-alpha', origin: 'subagent' }, revision: 'source:a' }]
+      },
+      async inspect() { headerInspected = true; return inspection() },
+    }, { get() { return undefined } })
+    await expect(byHeader.prepare('source-session')).rejects.toMatchObject({ code: 'subagent' })
+    expect(headerInspected).toBe(false)
+
     const consolidator = new SessionConsolidator(createStore(), {
       async listSnapshots() { return [snapshot()] },
       async inspect() {
