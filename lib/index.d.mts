@@ -64,6 +64,7 @@ type SessionSummary = {
   workspaceId: WorkspaceId | null;
   workspaceName: string | null;
   latestReceipt: SessionReceiptSummary | null;
+  archived: boolean;
 } & ({
   eligible: true;
   reason: null;
@@ -622,16 +623,14 @@ declare class SessionConsolidator {
   private readonly agents;
   private readonly version;
   private readonly excludeCwd;
-  private readonly isArchived;
   private readonly dedupeMode;
-  constructor(store: MarkdownMemoryStore, persistence: MemorySessionPersistence, agents: MemoryAgentRegistry, version?: string, excludeCwd?: (cwd: string) => boolean, isArchived?: (sessionId: string) => boolean, dedupeMode?: () => ConsolidationDedupeMode);
+  constructor(store: MarkdownMemoryStore, persistence: MemorySessionPersistence, agents: MemoryAgentRegistry, version?: string, excludeCwd?: (cwd: string) => boolean, dedupeMode?: () => ConsolidationDedupeMode);
   /** Observe, inspect, and re-observe one Session before exposing its complete logical events. */
   prepare(sessionId: string, signal?: AbortSignal): Promise<SessionConsolidationInput>;
   /** Validate one untrusted worker result against its frozen source and target generations. */
   planProposal(input: SessionConsolidationInput, value: unknown): ConsolidationProposalPlan;
   /** Recheck the frozen source generation immediately before entering the commit barrier. */
   assertSourceStable(input: SessionConsolidationInput, signal?: AbortSignal): Promise<void>;
-  private assertNotArchived;
 }
 //#endregion
 //#region src/consolidation-worker.d.ts

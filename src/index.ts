@@ -210,7 +210,6 @@ export function apply(ctx: Context, config: Config = {}): void {
         sessionCtx.agents,
         undefined,
         excludesConsolidationWorkspace,
-        isArchivedSession,
         () => consolidationSettings.read().dedupe,
       )
       const selection = consolidationSettings.read().selection

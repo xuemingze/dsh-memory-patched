@@ -60,7 +60,7 @@ describe('Host Cordis composition', () => {
     })
     const legacyPersistence = {
       async inspect(id: string) {
-        return { meta: { id, createdAt: id === 'session-eligible' ? 2 : 1, cwd: '/work/plugin-rpc' }, events: [] }
+        return { meta: { id, createdAt: id === 'session-eligible' ? 2 : id === 'session-live' ? 1 : 0, cwd: '/work/plugin-rpc' }, events: [] }
       },
       async listSnapshots() {
         return [
@@ -181,13 +181,14 @@ describe('Host Cordis composition', () => {
       value: {
         available: true,
         sessions: [
-          { sessionId: 'session-eligible', title: 'Eligible memory review', eligible: true },
-          { sessionId: 'session-live', title: 'Live memory review', eligible: false, reason: 'live' },
+          { sessionId: 'session-eligible', title: 'Eligible memory review', eligible: true, archived: false },
+          { sessionId: 'session-live', title: 'Live memory review', eligible: false, reason: 'live', archived: false },
+          { sessionId: 'session-archived', eligible: true, archived: true },
         ],
       },
     })
-    expect(await rpcHandler?.('sessions/consolidate', { sessionId: 'session-archived' }, signal))
-      .toMatchObject({ ok: false, error: { code: 'bad-request', message: expect.stringContaining('is archived') } })
+    const archivedResult = await rpcHandler?.('sessions/consolidate', { sessionId: 'session-archived' }, signal)
+    expect(archivedResult).toMatchObject({ ok: true, value: { status: 'no-change' } })
     const models = await rpcHandler?.('models/read', {}, signal)
     expect(models).toMatchObject({
       ok: true,
@@ -213,13 +214,14 @@ describe('Host Cordis composition', () => {
     }, signal)).toMatchObject({ ok: false, error: { code: 'bad-request' } })
     expect(await rpcHandler?.('sessions/consolidate', { sessionId: 'session-eligible' }, signal))
       .toMatchObject({ ok: true, value: { status: 'no-change', recovered: false, attempt: 1, changeCount: 0 } })
-    expect(opened).toBe(api === 'handles' ? 1 : 0)
+    expect(opened).toBe(api === 'handles' ? 2 : 0)
     expect(closed).toBe(opened)
     expect(await rpcHandler?.('sessions/list', {}, signal)).toMatchObject({
       ok: true,
       value: { sessions: [
         { sessionId: 'session-eligible', latestReceipt: { state: 'no-change', current: true } },
         { sessionId: 'session-live', latestReceipt: null },
+        { sessionId: 'session-archived', latestReceipt: { state: 'no-change', current: true }, archived: true },
       ] },
     })
     expect(await rpcHandler?.('workspace/read', { workspaceId, cwd: '/work/plugin-rpc' }, signal))

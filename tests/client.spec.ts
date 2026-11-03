@@ -86,6 +86,7 @@ describe('Session presentation', () => {
       eligible: true,
       reason: null,
       latestReceipt: null,
+      archived: false,
     }
     const receipt = {
       reviewId: `review-${'a'.repeat(64)}`,
@@ -217,6 +218,7 @@ describe('Memory Workspace Browser API', () => {
                 eligible: false,
                 reason: 'live',
                 latestReceipt: null,
+                archived: false,
               }] } }
             }
             if (endpoint === 'sessions/consolidate') {
@@ -319,6 +321,7 @@ describe('Session Workspace grouping', () => {
     const base = {
       title: null,
       latestReceipt: null,
+      archived: false,
       eligible: true as const,
       reason: null,
     }

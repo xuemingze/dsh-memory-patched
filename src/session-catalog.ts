@@ -37,8 +37,7 @@ export class SessionCatalog {
     const secondById = groupById(second)
     const duplicateFirstIds = duplicateIds(first)
     const unique = uniqueById(first).filter(snapshot => !isConsolidationWorkerSessionId(snapshot.header.id)
-      && !this.excludeCwd(snapshot.header.cwd)
-      && !this.isArchived(snapshot.header.id))
+      && !this.excludeCwd(snapshot.header.cwd))
     const latestReceipts = this.receipts?.latestBySourceSessions(new Map(
       unique.map(snapshot => [snapshot.header.id, snapshot.revision]),
     ))
@@ -69,6 +68,7 @@ export class SessionCatalog {
       workspaceId: workspace?.workspaceId ?? null,
       workspaceName: workspace?.displayName ?? null,
       latestReceipt: this.receiptSummary(snapshot, latestReceipt),
+      archived: this.isArchived(snapshot.header.id),
     } as const
     if (this.agents.get(snapshot.header.id) !== undefined) {
       return { ...base, eligible: false, reason: 'live' }

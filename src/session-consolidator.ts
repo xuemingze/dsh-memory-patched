@@ -77,7 +77,6 @@ export class SessionConsolidator {
     private readonly agents: MemoryAgentRegistry,
     private readonly version = CONSOLIDATOR_VERSION,
     private readonly excludeCwd: (cwd: string) => boolean = () => false,
-    private readonly isArchived: (sessionId: string) => boolean = () => false,
     private readonly dedupeMode: () => ConsolidationDedupeMode = () => 'merge',
   ) {}
 
@@ -87,7 +86,6 @@ export class SessionConsolidator {
     signal?.throwIfAborted()
 
     const first = exactSnapshot(await this.persistence.listSnapshots(signal), sessionId)
-    this.assertNotArchived(sessionId)
     assertNotLive(this.agents, sessionId)
     const cwd = first.header.cwd
     if (cwd === undefined) {
@@ -123,7 +121,6 @@ export class SessionConsolidator {
     signal?.throwIfAborted()
     const second = stableReobservation(await this.persistence.listSnapshots(signal), sessionId)
     signal?.throwIfAborted()
-    this.assertNotArchived(sessionId)
     assertNotLive(this.agents, sessionId)
     if (!sameSnapshot(first, second)) {
       throw new SessionConsolidationError('unstable', `Session "${sessionId}" changed while preparing consolidation`)
@@ -167,7 +164,6 @@ export class SessionConsolidator {
       input.source.sessionId,
     )
     signal?.throwIfAborted()
-    this.assertNotArchived(input.source.sessionId)
     assertNotLive(this.agents, input.source.sessionId)
     if (snapshot.revision !== input.source.revision
       || snapshot.header.createdAt !== input.source.createdAt
@@ -176,12 +172,6 @@ export class SessionConsolidator {
         'unstable',
         `Session "${input.source.sessionId}" changed before consolidation commit`,
       )
-    }
-  }
-
-  private assertNotArchived(sessionId: string): void {
-    if (this.isArchived(sessionId)) {
-      throw new SessionConsolidationError('archived', `Session "${sessionId}" is archived`)
     }
   }
 }

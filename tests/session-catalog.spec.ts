@@ -59,11 +59,11 @@ describe('Session candidate catalog', () => {
     await expect(catalog.list()).resolves.toEqual({
       available: true,
       sessions: [
-        { sessionId: 'eligible', title: null, createdAt: 50, workspaceId: memory.workspaceReferenceForCwd('/work/project-alpha').workspaceId, workspaceName: 'project-alpha', eligible: true, reason: null, latestReceipt: null },
-        { sessionId: 'live', title: null, createdAt: 40, workspaceId: memory.workspaceReferenceForCwd('/work/project-beta').workspaceId, workspaceName: 'project-beta', eligible: false, reason: 'live', latestReceipt: null },
-        { sessionId: 'missing-cwd', title: null, createdAt: 30, workspaceId: null, workspaceName: null, eligible: false, reason: 'missing-cwd', latestReceipt: null },
-        { sessionId: 'changed', title: null, createdAt: 20, workspaceId: memory.workspaceReferenceForCwd('/work/project-delta').workspaceId, workspaceName: 'project-delta', eligible: false, reason: 'unstable', latestReceipt: null },
-        { sessionId: 'relative', title: null, createdAt: 10, workspaceId: null, workspaceName: null, eligible: false, reason: 'workspace-unavailable', latestReceipt: null },
+        { sessionId: 'eligible', title: null, createdAt: 50, workspaceId: memory.workspaceReferenceForCwd('/work/project-alpha').workspaceId, workspaceName: 'project-alpha', eligible: true, reason: null, latestReceipt: null, archived: false },
+        { sessionId: 'live', title: null, createdAt: 40, workspaceId: memory.workspaceReferenceForCwd('/work/project-beta').workspaceId, workspaceName: 'project-beta', eligible: false, reason: 'live', latestReceipt: null, archived: false },
+        { sessionId: 'missing-cwd', title: null, createdAt: 30, workspaceId: null, workspaceName: null, eligible: false, reason: 'missing-cwd', latestReceipt: null, archived: false },
+        { sessionId: 'changed', title: null, createdAt: 20, workspaceId: memory.workspaceReferenceForCwd('/work/project-delta').workspaceId, workspaceName: 'project-delta', eligible: false, reason: 'unstable', latestReceipt: null, archived: false },
+        { sessionId: 'relative', title: null, createdAt: 10, workspaceId: null, workspaceName: null, eligible: false, reason: 'workspace-unavailable', latestReceipt: null, archived: false },
       ],
     })
     expect(calls).toBe(2)
@@ -89,7 +89,7 @@ describe('Session candidate catalog', () => {
     })
   })
 
-  it('omits archived Sessions instead of presenting them as disabled candidates', async () => {
+  it('presents archived Sessions as marked candidates instead of omitting them', async () => {
     const active = snapshot('active', 'source:a', 2, '/work/project-alpha')
     const archived = snapshot('archived', 'source:b', 1, '/work/project-alpha')
     const catalog = new SessionCatalog(store(), {
@@ -97,7 +97,10 @@ describe('Session candidate catalog', () => {
     }, { get() { return undefined } }, undefined, undefined, undefined, id => id === 'archived')
 
     await expect(catalog.list()).resolves.toMatchObject({
-      sessions: [{ sessionId: 'active' }],
+      sessions: [
+        { sessionId: 'active', archived: false },
+        { sessionId: 'archived', archived: true },
+      ],
     })
   })
 

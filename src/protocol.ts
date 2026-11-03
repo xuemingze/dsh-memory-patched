@@ -82,6 +82,7 @@ export type SessionSummary = {
   workspaceId: WorkspaceId | null
   workspaceName: string | null
   latestReceipt: SessionReceiptSummary | null
+  archived: boolean
 } & (
   | { eligible: true; reason: null }
   | { eligible: false; reason: SessionIneligibleReason }
@@ -419,7 +420,9 @@ export function parseConsolidationModelSelectResponse(value: unknown): Consolida
 }
 
 function parseSessionSummary(value: unknown, label: string): SessionSummary {
-  const record = requireRecord(value, label)
+  const raw = requireRecord(value, label)
+  // Legacy senders predate the archived marker: default it instead of rejecting the whole list.
+  const record: Record<string, unknown> = { ...raw, archived: raw.archived ?? false }
   requireExactKeys(record, [
     'sessionId',
     'title',
@@ -429,6 +432,7 @@ function parseSessionSummary(value: unknown, label: string): SessionSummary {
     'eligible',
     'reason',
     'latestReceipt',
+    'archived',
   ], label)
   const sessionId = requireNonEmptySingleLine(record.sessionId, `${label}.sessionId`)
   const title = record.title === null ? null : requireNonEmptySingleLine(record.title, `${label}.title`)
@@ -445,7 +449,10 @@ function parseSessionSummary(value: unknown, label: string): SessionSummary {
   const latestReceipt = record.latestReceipt === null
     ? null
     : parseSessionReceiptSummary(record.latestReceipt, `${label}.latestReceipt`)
-  const base = { sessionId, title, createdAt: record.createdAt, workspaceId, workspaceName, latestReceipt } as const
+  if (typeof record.archived !== 'boolean') throw new TypeError(`${label}.archived must be a boolean`)
+  const base = {
+    sessionId, title, createdAt: record.createdAt, workspaceId, workspaceName, latestReceipt, archived: record.archived,
+  } as const
   if (record.eligible === true) {
     if (record.reason !== null) throw new TypeError(`${label}.reason must be null when eligible`)
     return { ...base, eligible: true, reason: null }
