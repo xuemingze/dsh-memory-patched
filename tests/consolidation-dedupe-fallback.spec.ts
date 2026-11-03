@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../src/consolidation-dedupe.ts', async importOriginal => {
   const actual = await importOriginal<typeof import('../src/consolidation-dedupe.ts')>()
@@ -9,7 +9,6 @@ import { Context } from '@deepseek-ai/cordis'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
 import { parseConsolidationProposal } from '../src/consolidation-proposal.ts'
 import { MarkdownMemoryStore } from '../src/memory-store.ts'
 

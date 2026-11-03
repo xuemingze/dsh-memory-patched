@@ -1,6 +1,6 @@
 /** Rebuild an accepted proposal plan from a persisted worker Session. */
 
-import { parseConsolidationProposal, type ConsolidationProposalPlan } from './consolidation-proposal.ts'
+import { parseConsolidationProposal, type ConsolidationDedupeMode, type ConsolidationProposalPlan } from './consolidation-proposal.ts'
 import type { ConsolidationReceipt } from './consolidation-receipt.ts'
 import { CONSOLIDATION_PROPOSAL_TOOL } from './consolidation-worker.ts'
 import type { MemorySessionPersistence } from './host-contracts.ts'
@@ -35,6 +35,7 @@ export class WorkerSessionPlanReplay implements ConsolidationPlanReplay {
   constructor(
     private readonly persistence: MemorySessionPersistence,
     private readonly consolidator: SessionConsolidator,
+    private readonly dedupeMode: () => ConsolidationDedupeMode = () => 'merge',
   ) {}
 
   async loadPlan(
@@ -69,6 +70,7 @@ export class WorkerSessionPlanReplay implements ConsolidationPlanReplay {
       sourceEvidence: evidence.sourceEvidence as SessionConsolidationInput['source']['evidence'],
       global: globalMemoryViewOf(evidence.globalMemory as string),
       workspace: replayedWorkspace,
+      dedupe: this.dedupeMode(),
     })
   }
 }

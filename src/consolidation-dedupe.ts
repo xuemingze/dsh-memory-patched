@@ -82,12 +82,14 @@ export function demoteHeadings(markdown: string): string {
     .map(line => {
       const match = /^(#{1,6})(\s.*)?$/.exec(line)
       if (!match) return line
-      if (!droppedTitle && match[1].length === 1) {
+      const marks = match[1]
+      if (marks === undefined) return line
+      if (!droppedTitle && marks.length === 1) {
         droppedTitle = true
         return null
       }
-      const level = Math.min(match[1].length + 1, 6)
-      return `${'#'.repeat(level)}${line.slice(match[1].length)}`
+      const level = Math.min(marks.length + 1, 6)
+      return `${'#'.repeat(level)}${line.slice(marks.length)}`
     })
     .filter((line): line is string => line !== null)
   return lines.join('\n')

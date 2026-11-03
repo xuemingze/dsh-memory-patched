@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path'
 import { parse, stringify } from 'yaml'
 import type { ConsolidationWorkerConfig } from './consolidation-worker.ts'
 import { redactCredentials } from './redact.ts'
+import type { ConsolidationDedupeMode } from './consolidation-proposal.ts'
 import type {
   ConsolidationModelCatalogResponse,
   ConsolidationModelSelection,
@@ -33,6 +34,7 @@ export interface MemoryLlmCatalog {
 export interface ConsolidationSettingsView {
   readonly selection: ConsolidationModelSelection
   readonly debugEnabled: boolean
+  readonly dedupe: ConsolidationDedupeMode
   readonly revision: MemoryRevision
 }
 
@@ -66,13 +68,14 @@ export class ConsolidationSettingsStore {
   }
 
   private fallbackSettings(): Omit<ConsolidationSettingsView, 'revision'> {
-    return { selection: validateSelection(this.defaults), debugEnabled: false }
+    return { selection: validateSelection(this.defaults), debugEnabled: false, dedupe: 'merge' }
   }
 
   commit(input: {
     expectedRevision: MemoryRevision
     selection: ConsolidationModelSelection
     debugEnabled: boolean
+    dedupe?: ConsolidationDedupeMode
   }): { status: 'committed'; revision: MemoryRevision } | { status: 'conflict'; currentRevision: MemoryRevision } {
     const current = this.read()
     if (current.revision !== input.expectedRevision) {
@@ -81,6 +84,8 @@ export class ConsolidationSettingsStore {
     const settings = {
       selection: validateSelection(input.selection),
       debugEnabled: validateDebugEnabled(input.debugEnabled),
+      // Callers that predate the dedupe setting must not reset it.
+      dedupe: input.dedupe === undefined ? current.dedupe : coerceDedupeModeStrict(input.dedupe),
     }
     mkdirSync(dirname(this.path), { recursive: true })
     const temporary = `${this.path}.tmp-${process.pid}-${randomUUID()}`
@@ -163,15 +168,29 @@ function parseSettings(source: string): Omit<ConsolidationSettingsView, 'revisio
   const record = value as Record<string, unknown>
   const keys = Object.keys(record).sort().join(',')
   if (record.format === 1 && keys === 'format,model,provider') {
-    return { selection: validateSelection({ provider: record.provider, model: record.model }), debugEnabled: false }
+    return { selection: validateSelection({ provider: record.provider, model: record.model }), debugEnabled: false, dedupe: 'merge' }
   }
-  if (record.format !== SETTINGS_FORMAT || keys !== 'debug,format,model,provider') {
+  // Files written before the dedupe setting lack the key: default it instead of
+  // rejecting the file, so the model selection survives the upgrade in place.
+  if (record.format !== SETTINGS_FORMAT || (keys !== 'debug,format,model,provider' && keys !== 'debug,dedupe,format,model,provider')) {
     throw new TypeError('Memory consolidation settings have missing or unknown fields')
   }
   return {
     selection: validateSelection({ provider: record.provider, model: record.model }),
     debugEnabled: validateDebugEnabled(record.debug),
+    dedupe: coerceDedupeMode(record.dedupe),
   }
+}
+
+function coerceDedupeMode(value: unknown): ConsolidationDedupeMode {
+  return value === 'off' || value === 'merge' || value === 'merge-delete' ? value : 'merge'
+}
+
+function coerceDedupeModeStrict(value: ConsolidationDedupeMode): ConsolidationDedupeMode {
+  if (value !== 'off' && value !== 'merge' && value !== 'merge-delete') {
+    throw new TypeError('consolidation dedupe must be one of off, merge, merge-delete')
+  }
+  return value
 }
 
 function validateSelection(value: { provider: unknown; model: unknown }): ConsolidationModelSelection {
@@ -195,6 +214,7 @@ function serializeSettings(settings: Omit<ConsolidationSettingsView, 'revision'>
     provider: settings.selection.provider,
     model: settings.selection.model,
     debug: settings.debugEnabled,
+    dedupe: settings.dedupe,
   }, { lineWidth: 0 })
 }
 

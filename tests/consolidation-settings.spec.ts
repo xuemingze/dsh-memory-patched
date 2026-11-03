@@ -35,7 +35,7 @@ describe('ConsolidationSettingsStore', () => {
     expect(committed.status).toBe('committed')
     expect(store.read().selection).toEqual({ provider: 'openai', model: 'gpt-small' })
     expect(store.read().debugEnabled).toBe(true)
-    expect(readFileSync(store.path, 'utf8')).toBe('format: 2\nprovider: openai\nmodel: gpt-small\ndebug: true\n')
+    expect(readFileSync(store.path, 'utf8')).toBe('format: 2\nprovider: openai\nmodel: gpt-small\ndebug: true\ndedupe: merge\n')
     expect(store.commit({
       expectedRevision: initial.revision,
       selection: { provider: 'other', model: 'other' },
@@ -59,7 +59,7 @@ describe('ConsolidationSettingsStore', () => {
         debugEnabled: false,
       })).toMatchObject({ status: 'committed' })
       expect(readFileSync(join(root, 'settings.yml'), 'utf8'))
-        .toBe('format: 2\nprovider: default\nmodel: cheap\ndebug: false\n')
+        .toBe('format: 2\nprovider: default\nmodel: cheap\ndebug: false\ndedupe: merge\n')
     } finally {
       warn.mockRestore()
     }
@@ -136,5 +136,58 @@ describe('ConsolidationSettingsStore', () => {
       async listModels() { return [] },
       async resolveModelInfo() { return { defaultMaxTokens: 0 } },
     }, { provider: 'provider-a', model: 'broken' }, 8192)).rejects.toThrow(/model output-token limit/)
+  })
+})
+
+describe('dedupe setting', () => {
+  it('defaults to merge for format 2 files without the key and keeps the selection', () => {
+    const { root, store } = setup()
+    writeFileSync(join(root, 'settings.yml'), 'format: 2\nprovider: existing\nmodel: cheap\ndebug: false\n')
+    expect(store.read()).toMatchObject({
+      selection: { provider: 'existing', model: 'cheap' },
+      dedupe: 'merge',
+    })
+  })
+
+  it('reads format 1 files with dedupe defaulting to merge', () => {
+    const { root, store } = setup()
+    writeFileSync(join(root, 'settings.yml'), 'format: 1\nprovider: existing\nmodel: cheap\n')
+    expect(store.read()).toMatchObject({ selection: { provider: 'existing', model: 'cheap' }, dedupe: 'merge' })
+  })
+
+  it('reads an explicit dedupe mode from the five-key format', () => {
+    const { root, store } = setup()
+    writeFileSync(join(root, 'settings.yml'), 'format: 2\nprovider: existing\nmodel: cheap\ndebug: false\ndedupe: off\n')
+    expect(store.read()).toMatchObject({ dedupe: 'off' })
+    writeFileSync(join(root, 'settings.yml'), 'format: 2\nprovider: existing\nmodel: cheap\ndebug: false\ndedupe: merge-delete\n')
+    expect(store.read()).toMatchObject({ dedupe: 'merge-delete' })
+  })
+
+  it('coerces an invalid dedupe value to merge without losing the selection', () => {
+    const { root, store } = setup()
+    writeFileSync(join(root, 'settings.yml'), 'format: 2\nprovider: existing\nmodel: cheap\ndebug: false\ndedupe: aggressive\n')
+    expect(store.read()).toMatchObject({ selection: { provider: 'existing', model: 'cheap' }, dedupe: 'merge' })
+  })
+
+  it('commit preserves dedupe when omitted and writes it when given', () => {
+    const { root, store } = setup()
+    writeFileSync(join(root, 'settings.yml'), 'format: 2\nprovider: existing\nmodel: cheap\ndebug: false\ndedupe: off\n')
+    const view = store.read()
+    expect(store.commit({
+      expectedRevision: view.revision,
+      selection: view.selection,
+      debugEnabled: view.debugEnabled,
+    })).toMatchObject({ status: 'committed' })
+    expect(store.read().dedupe).toBe('off')
+    expect(readFileSync(join(root, 'settings.yml'), 'utf8')).toContain('dedupe: off')
+
+    const next = store.read()
+    store.commit({
+      expectedRevision: next.revision,
+      selection: next.selection,
+      debugEnabled: next.debugEnabled,
+      dedupe: 'merge-delete',
+    })
+    expect(store.read().dedupe).toBe('merge-delete')
   })
 })

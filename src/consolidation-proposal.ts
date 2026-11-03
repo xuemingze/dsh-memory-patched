@@ -404,26 +404,36 @@ function applyDedupe(
   const existingNames = new Set(input.workspace.records.map(record => record.name))
   const finalPuts: PutChange[] = []
   for (const put of folded) {
-    const twin = finalPuts.find(other => other.record.name === put.record.name)
-    if (twin !== undefined) {
+    const twinIndex = finalPuts.findIndex(other => other.record.name === put.record.name)
+    if (twinIndex !== -1) {
+      const twin = finalPuts[twinIndex]
+      if (twin === undefined) continue
       const survivor = put.record.content.length >= twin.record.content.length ? put.record : twin.record
       const absorbed = survivor === put.record ? twin.record : put.record
-      twin.record = { ...survivor, description: longerDescription(survivor, absorbed), content: mergedContent(survivor, absorbed) }
+      finalPuts[twinIndex] = {
+        ...twin,
+        record: { ...survivor, description: longerDescription(survivor, absorbed), content: mergedContent(survivor, absorbed) },
+      }
       events.push({ kind: 'merged-put', kept: twin.record.name, absorbed: put.record.name, intersection: intersectionOf(survivor, absorbed) })
       continue
     }
-    const related = finalPuts.find(other => other.record.name !== put.record.name && sameTopicPair(other.record, put.record))
-    if (related !== undefined) {
+    const relatedIndex = finalPuts.findIndex(other => other.record.name !== put.record.name && sameTopicPair(other.record, put.record))
+    if (relatedIndex !== -1) {
+      const related = finalPuts[relatedIndex]
+      if (related === undefined) continue
       const survivor = put.record.content.length >= related.record.content.length ? put.record : related.record
       const absorbed = survivor === put.record ? related.record : put.record
       const keptName = existingNames.has(related.record.name) || !existingNames.has(put.record.name)
         ? related.record.name
         : put.record.name
-      related.record = {
-        name: keptName,
-        description: longerDescription(survivor, absorbed),
-        type: related.record.type,
-        content: mergedContent(survivor, absorbed),
+      finalPuts[relatedIndex] = {
+        ...related,
+        record: {
+          name: keptName,
+          description: longerDescription(survivor, absorbed),
+          type: related.record.type,
+          content: mergedContent(survivor, absorbed),
+        },
       }
       events.push({ kind: 'merged-put', kept: keptName, absorbed: put.record.name, intersection: intersectionOf(survivor, absorbed) })
       continue
@@ -467,8 +477,10 @@ function droppedSectionHeadings(before: string, after: string): string[] {
   const count = (source: string) => {
     const counts = new Map<string, number>()
     for (const match of source.matchAll(/^##\s+(.+)$/gm)) {
-      const heading = match[1].trim()
-      counts.set(heading, (counts.get(heading) ?? 0) + 1)
+      const heading = match[1]
+      if (heading === undefined) continue
+      const trimmed = heading.trim()
+      counts.set(trimmed, (counts.get(trimmed) ?? 0) + 1)
     }
     return counts
   }

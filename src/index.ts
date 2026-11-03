@@ -211,6 +211,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         undefined,
         excludesConsolidationWorkspace,
         isArchivedSession,
+        () => consolidationSettings.read().dedupe,
       )
       const selection = consolidationSettings.read().selection
       const worker = new SessionConsolidationWorker(
@@ -228,7 +229,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         ),
       )
       const commits = new ConsolidationCommitCoordinator(store, consolidator, receipts)
-      const replay = new WorkerSessionPlanReplay(persistence, consolidator)
+      const replay = new WorkerSessionPlanReplay(persistence, consolidator, () => consolidationSettings.read().dedupe)
       const runner = new SessionConsolidationRunner(consolidator, worker, receipts, commits, replay, store, debug)
       sessionWorker = worker
       sessionRunner = runner

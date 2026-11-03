@@ -15,6 +15,7 @@ import type {
 } from './memory-store.ts'
 import {
   parseConsolidationProposal,
+  type ConsolidationDedupeMode,
   type ConsolidationProposalPlan,
 } from './consolidation-proposal.ts'
 import {
@@ -76,6 +77,7 @@ export class SessionConsolidator {
     private readonly version = CONSOLIDATOR_VERSION,
     private readonly excludeCwd: (cwd: string) => boolean = () => false,
     private readonly isArchived: (sessionId: string) => boolean = () => false,
+    private readonly dedupeMode: () => ConsolidationDedupeMode = () => 'merge',
   ) {}
 
   /** Observe, inspect, and re-observe one Session before exposing its complete logical events. */
@@ -149,6 +151,7 @@ export class SessionConsolidator {
       sourceEvidence: input.source.evidence,
       global: input.global,
       workspace: input.workspace,
+      dedupe: this.dedupeMode(),
     })
   }
 
