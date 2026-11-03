@@ -107,6 +107,26 @@ describe('SessionConsolidator input preparation', () => {
     expect(inspected).toBe(false)
   })
 
+  it('rejects a subagent Session after inspection', async () => {
+    const consolidator = new SessionConsolidator(createStore(), {
+      async listSnapshots() { return [snapshot()] },
+      async inspect() {
+        return {
+          meta: snapshot().header,
+          events: [
+            { seq: 0, type: 'subagent/descriptor', data: { label: '评审 memory-store 核心' } },
+            { seq: 1, type: 'user/message', data: {
+              content: [{ type: 'text', text: 'review this module' }],
+              source: { kind: 'user' },
+            } },
+          ],
+        }
+      },
+    }, { get() { return undefined } })
+
+    await expect(consolidator.prepare('source-session')).rejects.toMatchObject({ code: 'subagent' })
+  })
+
   it('rejects direct consolidation of a Session in the internal consolidation Workspace', async () => {
     const internalWorkspace = '/memory/consolidator-workspace'
     let inspected = false

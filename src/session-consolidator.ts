@@ -32,6 +32,7 @@ export type SessionConsolidationErrorCode =
   | 'ambiguous'
   | 'live'
   | 'archived'
+  | 'subagent'
   | 'missing-cwd'
   | 'workspace-unavailable'
   | 'unstable'
@@ -112,6 +113,9 @@ export class SessionConsolidator {
     const inspection = await this.persistence.inspect(sessionId, signal)
     signal?.throwIfAborted()
     assertInspectionMatches(first, inspection)
+    if (hasSubagentDescriptor(inspection.events)) {
+      throw new SessionConsolidationError('subagent', `Session "${sessionId}" is a subagent Session`)
+    }
     const [global, workspace] = await Promise.all([
       this.store.readGlobal(),
       this.store.readWorkspace(scope),
@@ -191,6 +195,15 @@ function exactSnapshot(snapshots: readonly MemorySessionSnapshot[], sessionId: s
     throw new SessionConsolidationError('ambiguous', `Session "${sessionId}" has multiple persistence snapshots`)
   }
   return matches[0]!
+}
+
+function hasSubagentDescriptor(events: readonly unknown[]): boolean {
+  return events.some((event) => {
+    const record = event !== null && typeof event === 'object' && !Array.isArray(event)
+      ? event as Record<string, unknown>
+      : undefined
+    return record?.type === 'subagent/descriptor'
+  })
 }
 
 function stableReobservation(
