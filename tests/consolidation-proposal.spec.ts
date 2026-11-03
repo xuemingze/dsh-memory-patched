@@ -232,3 +232,170 @@ describe('consolidation proposal planning', () => {
     })).not.toThrow(ConsolidationProposalError)
   })
 })
+
+describe('consolidation proposal dedupe', () => {
+  const fullContent = 'dsh-ops 插件从 npm 华为云源重装 0.4.4，runtime 三件齐，受限沙箱可用。安装命令与验证步骤都已记录，bash 执行器路径覆盖已配置，回退只需删除 bashPath。'
+
+  async function dedupeWorkspace() {
+    const target = await workspace()
+    await target.store.commitWorkspace({
+      scope: target.scope,
+      expectedRevision: target.view.revision,
+      changes: [
+        { action: 'put', record: { name: 'dsh-ops-reinstall', description: 'dsh-ops 插件重装记录，安装命令与验证步骤。', type: 'project', content: fullContent } },
+        { action: 'put', record: { name: 'free-model-plugin', description: '免费模型插件安装记录。', type: 'project', content: 'dsh-our-free-model 免费模型插件，npm 作用域名与裸包名互斥，用 alias 装法修好，客户端重复注册会启动失败。' } },
+      ],
+    })
+    return { ...target, view: await target.store.readWorkspace(target.scope) }
+  }
+
+  async function signpostWorkspace() {
+    const target = await workspace()
+    await target.store.commitWorkspace({
+      scope: target.scope,
+      expectedRevision: target.view.revision,
+      changes: [
+        { action: 'put', record: { name: 'dsh-ops-reinstall', description: 'dsh-ops 插件重装记录。', type: 'project', content: 'dsh-ops 插件重装记录，详见 memory/dsh-ops-removal.md。记录日期 2026-11-03。' } },
+      ],
+    })
+    return { ...target, view: await target.store.readWorkspace(target.scope) }
+  }
+
+  it('merges a same-topic put into the existing record name and emits merged-put', async () => {
+    const target = await dedupeWorkspace()
+    const planned = parseConsolidationProposal({
+      outcome: 'changes',
+      changes: [{
+        action: 'put',
+        record: {
+          name: 'dsh-ops-reinstall-note',
+          description: 'dsh-ops 重装记录跟进。',
+          type: 'project',
+          content: 'dsh-ops 插件重装完成，安装命令与验证步骤已复核',
+        },
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      }],
+    }, { sourceEvidence: evidence, global: await target.store.readGlobal(), workspace: target.view })
+
+    const puts = planned.proposal.changes.filter(change => change.action === 'put')
+    expect(puts).toHaveLength(1)
+    expect(puts[0]).toMatchObject({ record: { name: 'dsh-ops-reinstall' } })
+    expect((puts[0] as { record: { content: string } }).record.content).toContain('已复核')
+    expect(planned.dedupe).toEqual([
+      { kind: 'merged-put', kept: 'dsh-ops-reinstall', absorbed: 'dsh-ops-reinstall-note', intersection: expect.any(Number) },
+    ])
+    const merged = planned.preview.records.find(record => record.name === 'dsh-ops-reinstall')
+    expect(merged?.content).toContain('已复核')
+    expect(planned.preview.records.filter(record => record.name.includes('dsh-ops'))).toHaveLength(1)
+  })
+
+  it('leaves sibling records and plain updates untouched', async () => {
+    const target = await dedupeWorkspace()
+    const planned = parseConsolidationProposal({
+      outcome: 'changes',
+      changes: [{
+        action: 'put',
+        record: {
+          name: 'niu-bash-executor',
+          description: 'bash 执行器切换记录。',
+          type: 'project',
+          content: 'dsh-ops 的 bash 执行器换成 niu.exe，受限模式只认 pinned MSYS',
+        },
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      }],
+    }, { sourceEvidence: evidence, global: await target.store.readGlobal(), workspace: target.view })
+    expect(planned.proposal.changes[0]).toMatchObject({ action: 'put', record: { name: 'niu-bash-executor' } })
+    expect(planned.dedupe).toBeUndefined()
+
+    const update = parseConsolidationProposal({
+      outcome: 'changes',
+      changes: [{
+        action: 'put',
+        record: { name: 'dsh-ops-reinstall', description: '更新。', type: 'project', content: '同名更新内容' },
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      }],
+    }, { sourceEvidence: evidence, global: await target.store.readGlobal(), workspace: target.view })
+    expect(update.proposal.changes[0]).toMatchObject({ action: 'put', record: { name: 'dsh-ops-reinstall' } })
+    expect(update.dedupe).toBeUndefined()
+  })
+
+  it('strips signpost sections from a Global replacement', async () => {
+    const target = await dedupeWorkspace()
+    const content = [
+      '# Global Memory',
+      '',
+      '## User Preferences',
+      '- Prefer concise answers.',
+      '',
+      '## dsh-ops 重装记录',
+      fullContent,
+      '',
+      '## dsh-ops 索引',
+      'dsh-ops 插件重装记录，详见 memory/dsh-ops-removal.md。记录日期 2026-11-03。',
+      '',
+    ].join('\n')
+    const planned = parseConsolidationProposal({
+      outcome: 'changes',
+      changes: [{ action: 'replace-global', content, evidence: [{ fromSeq: 0, toSeq: 0 }] }],
+    }, { sourceEvidence: evidence, global: await target.store.readGlobal(), workspace: target.view })
+
+    expect(planned.globalPreview.content).toContain('## dsh-ops 重装记录')
+    expect(planned.globalPreview.content).toContain('## User Preferences')
+    expect(planned.globalPreview.content).not.toContain('## dsh-ops 索引')
+    expect(planned.dedupe).toEqual([
+      { kind: 'dropped-signpost-section', heading: 'dsh-ops 索引' },
+    ])
+  })
+
+  it('honors dedupe off mode', async () => {
+    const target = await dedupeWorkspace()
+    const planned = parseConsolidationProposal({
+      outcome: 'changes',
+      changes: [{
+        action: 'put',
+        record: {
+          name: 'dsh-ops-reinstall-note',
+          description: 'dsh-ops 重装记录跟进。',
+          type: 'project',
+          content: 'dsh-ops 插件重装完成，安装命令与验证步骤已复核',
+        },
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      }],
+    }, { sourceEvidence: evidence, global: await target.store.readGlobal(), workspace: target.view, dedupe: 'off' })
+    expect(planned.proposal.changes[0]).toMatchObject({ action: 'put', record: { name: 'dsh-ops-reinstall-note' } })
+    expect(planned.dedupe).toBeUndefined()
+  })
+
+  it('merge-delete lets the fuller new record win with a synthesized delete', async () => {
+    const target = await signpostWorkspace()
+    const changes = [{
+      action: 'put' as const,
+      record: {
+        name: 'dsh-ops-reinstall-full',
+        description: 'dsh-ops 插件重装完整记录。',
+        type: 'project' as const,
+        content: fullContent,
+      },
+      evidence: [{ fromSeq: 0, toSeq: 0 }],
+    }]
+    const aggressive = parseConsolidationProposal({ outcome: 'changes', changes }, {
+      sourceEvidence: evidence,
+      global: await target.store.readGlobal(),
+      workspace: target.view,
+      dedupe: 'merge-delete',
+    })
+    expect(aggressive.proposal.changes.map(change => change.action)).toEqual(['delete', 'put'])
+    expect(aggressive.proposal.changes).toContainEqual(expect.objectContaining({ action: 'delete', name: 'dsh-ops-reinstall' }))
+    expect(aggressive.proposal.changes).toContainEqual(expect.objectContaining({ action: 'put', record: expect.objectContaining({ name: 'dsh-ops-reinstall-full' }) }))
+    expect(aggressive.dedupe?.[0]).toMatchObject({ kind: 'merged-put', kept: 'dsh-ops-reinstall-full', absorbed: 'dsh-ops-reinstall' })
+
+    const conservative = parseConsolidationProposal({ outcome: 'changes', changes }, {
+      sourceEvidence: evidence,
+      global: await target.store.readGlobal(),
+      workspace: target.view,
+    })
+    const conservativePuts = conservative.proposal.changes.filter(change => change.action === 'put')
+    expect(conservativePuts).toHaveLength(1)
+    expect(conservativePuts[0]).toMatchObject({ record: { name: 'dsh-ops-reinstall' } })
+  })
+})

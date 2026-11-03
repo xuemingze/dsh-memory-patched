@@ -19,6 +19,8 @@ const SIGNPOST_MIN_INTERSECTION = 2
  * count would merge records that merely live in the same domain.
  */
 const TOPIC_CONTAINMENT = 0.5
+/** One-line records collide on generic vocabulary; containment needs substance. */
+const TOPIC_MIN_CHUNKS = 8
 
 /** Lowercased ASCII words (≥2 chars) plus CJK bigrams; single CJK chars kept as-is. */
 export function textChunks(text: string): Set<string> {
@@ -56,13 +58,15 @@ export function isSignpostText(text: string): boolean {
 /**
  * Same-topic test over (shorter, longer) content. Same topic when the shorter
  * side's chunks are largely contained in the longer side, or when the shorter
- * side is a signpost whose topic the longer side echoes.
+ * side is a signpost whose topic the longer side echoes. The containment rule
+ * needs substantial content: one-line records collide on generic vocabulary,
+ * so below TOPIC_MIN_CHUNKS only the signpost rule may fire.
  */
 export function isSameTopic(shorter: string, longer: string): boolean {
   const shortChunks = textChunks(shorter)
   const intersection = chunkIntersection(shortChunks, textChunks(longer))
   if (isSignpostText(shorter) && intersection >= SIGNPOST_MIN_INTERSECTION) return true
-  if (shortChunks.size === 0) return false
+  if (shortChunks.size < TOPIC_MIN_CHUNKS) return false
   return intersection >= TOPIC_MIN_INTERSECTION && intersection / shortChunks.size >= TOPIC_CONTAINMENT
 }
 

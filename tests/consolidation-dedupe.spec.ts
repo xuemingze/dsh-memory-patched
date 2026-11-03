@@ -73,6 +73,12 @@ describe('isSameTopic', () => {
     const b = 'dsh-ops 的 bash 执行器换成 niu.exe'
     expect(isSameTopic(a, b)).toBe(false)
   })
+
+  it('一行小文本即使交集达 3 也不判同主题（泛词碰撞）', () => {
+    const a = 'new-rule New durable rule. Remember this rule.'
+    const b = 'existing-rule Existing durable rule. Keep this rule.'
+    expect(isSameTopic(a, b)).toBe(false)
+  })
 })
 
 describe('demoteHeadings', () => {

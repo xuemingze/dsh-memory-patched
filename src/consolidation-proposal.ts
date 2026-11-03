@@ -13,6 +13,8 @@ import {
   type WorkspaceMemoryView,
 } from './memory-store.ts'
 import type { ConsolidationEvidenceTurn } from './consolidation-evidence.ts'
+import { chunkIntersection, demoteHeadings, isSameTopic, stripSignpostSections, textChunks } from './consolidation-dedupe.ts'
+import { redactCredentials } from './redact.ts'
 
 /** Inclusive source Session evidence interval. */
 export interface ConsolidationEvidenceRange {
@@ -43,12 +45,26 @@ export type ConsolidationProposal =
   | { readonly outcome: 'no-change'; readonly changes: readonly [] }
   | { readonly outcome: 'changes'; readonly changes: readonly ConsolidationProposalChange[] }
 
+/**
+ * Deterministic dedupe applied to a parsed proposal before it is previewed and
+ * committed. `merge` (default) only rewrites the proposal; `merge-delete`
+ * additionally lets a fuller new record replace an existing one by name.
+ */
+export type ConsolidationDedupeMode = 'off' | 'merge' | 'merge-delete'
+
+/** Audit trail of one dedupe pass, recorded to the consolidation debug log. */
+export type ConsolidationDedupeEvent =
+  | { readonly kind: 'merged-put'; readonly kept: string; readonly absorbed: string; readonly intersection: number }
+  | { readonly kind: 'dropped-signpost-section'; readonly heading: string }
+  | { readonly kind: 'dedupe-failed'; readonly error: string }
+
 /** Canonical proposal plus the exact Workspace generation it would produce. */
 export interface ConsolidationProposalPlan {
   readonly proposal: ConsolidationProposal
   readonly globalBefore: GlobalMemoryView
   readonly globalPreview: GlobalMemoryPreview
   readonly preview: WorkspaceMemoryPreview
+  readonly dedupe?: readonly ConsolidationDedupeEvent[]
 }
 
 /** Raised when an untrusted worker proposal violates the closed contract. */
@@ -59,13 +75,14 @@ export class ConsolidationProposalError extends Error {
   }
 }
 
-/** Parse, validate, canonicalize, and preview one untrusted worker proposal. */
+/** Parse, validate, canonicalize, deduplicate, and preview one untrusted worker proposal. */
 export function parseConsolidationProposal(
   value: unknown,
   input: {
     readonly sourceEvidence: readonly ConsolidationEvidenceTurn[]
     readonly global: GlobalMemoryView
     readonly workspace: WorkspaceMemoryView
+    readonly dedupe?: ConsolidationDedupeMode
   },
 ): ConsolidationProposalPlan {
   const candidate = requireRecord(value, 'proposal')
@@ -103,13 +120,31 @@ export function parseConsolidationProposal(
   }
   changes.sort(compareChanges)
 
-  const globalChange = changes.find(change => change.action === 'replace-global')
+  const dedupeMode = input.dedupe ?? 'merge'
+  let effectiveChanges = changes
+  let dedupeEvents: readonly ConsolidationDedupeEvent[] | undefined
+  if (dedupeMode !== 'off') {
+    try {
+      const applied = applyDedupe(changes, input, dedupeMode)
+      effectiveChanges = applied.changes
+      if (applied.events.length > 0) dedupeEvents = applied.events
+    } catch (cause: unknown) {
+      // Dedupe must never break consolidation: fall back to the untouched proposal.
+      effectiveChanges = changes
+      dedupeEvents = [{
+        kind: 'dedupe-failed',
+        error: redactCredentials(cause instanceof Error ? cause.message : String(cause)),
+      }]
+    }
+  }
+
+  const globalChange = effectiveChanges.find(change => change.action === 'replace-global')
   const globalPreview = globalChange?.action === 'replace-global'
     ? previewGlobalMemory(input.global, globalChange.content)
     : unchangedGlobalPreview(input.global)
   let preview: WorkspaceMemoryPreview
   try {
-    const workspaceChanges = changes.filter(isWorkspaceChange).map(toMemoryChange)
+    const workspaceChanges = effectiveChanges.filter(isWorkspaceChange).map(toMemoryChange)
     preview = workspaceChanges.length === 0
       ? unchangedPreview(input.workspace)
       : previewWorkspaceChanges(input.workspace, workspaceChanges)
@@ -119,10 +154,11 @@ export function parseConsolidationProposal(
     }
     throw cause
   }
+  const dedupe = dedupeEvents === undefined ? {} : { dedupe: dedupeEvents }
   if (!globalPreview.changed && !preview.changed) {
-    return { proposal: { outcome: 'no-change', changes: [] }, globalBefore: { ...input.global }, globalPreview, preview }
+    return { proposal: { outcome: 'no-change', changes: [] }, globalBefore: { ...input.global }, globalPreview, preview, ...dedupe }
   }
-  return { proposal: { outcome: 'changes', changes }, globalBefore: { ...input.global }, globalPreview, preview }
+  return { proposal: { outcome: 'changes', changes: effectiveChanges }, globalBefore: { ...input.global }, globalPreview, preview, ...dedupe }
 }
 
 function parseChange(
@@ -276,4 +312,172 @@ function requireExactKeys(record: Record<string, unknown>, expected: readonly st
 
 function isWorkspaceMemoryType(value: unknown): value is WorkspaceMemoryType {
   return value === 'feedback' || value === 'project' || value === 'reference'
+}
+
+type PutChange = Extract<ConsolidationProposalChange, { action: 'put' }>
+type DeleteChange = Extract<ConsolidationProposalChange, { action: 'delete' }>
+type GlobalChange = Extract<ConsolidationProposalChange, { action: 'replace-global' }>
+
+function recordText(record: WorkspaceMemory): string {
+  return `${record.name} ${record.description} ${record.content}`
+}
+
+/** isSameTopic ordered by text length, as its (shorter, longer) contract requires. */
+function sameTopicPair(a: WorkspaceMemory, b: WorkspaceMemory): boolean {
+  const [shorter, longer] = recordText(a).length <= recordText(b).length ? [a, b] : [b, a]
+  return isSameTopic(recordText(shorter), recordText(longer))
+}
+
+function intersectionOf(a: WorkspaceMemory, b: WorkspaceMemory): number {
+  return chunkIntersection(textChunks(recordText(a)), textChunks(recordText(b)))
+}
+
+/** Longer content survives first; the absorbed body is demoted and appended. */
+function mergedContent(survivor: WorkspaceMemory, absorbed: WorkspaceMemory): string {
+  if (absorbed.content.trim() === '') return survivor.content
+  return `${survivor.content}\n\n${demoteHeadings(absorbed.content)}`
+}
+
+function longerDescription(a: WorkspaceMemory, b: WorkspaceMemory): string {
+  return a.description.length >= b.description.length ? a.description : b.description
+}
+
+/**
+ * Deterministic dedupe over a parsed proposal (alice-core's consolidation rules):
+ * same-topic puts fold into one record, signpost sections are stripped from a
+ * Global replacement, and every decision is reported as an audit event.
+ * Pure: never mutates the input; the caller owns the failure fallback.
+ */
+function applyDedupe(
+  changes: readonly ConsolidationProposalChange[],
+  input: {
+    readonly global: GlobalMemoryView
+    readonly workspace: WorkspaceMemoryView
+  },
+  mode: ConsolidationDedupeMode,
+): { changes: ConsolidationProposalChange[]; events: ConsolidationDedupeEvent[] } {
+  const events: ConsolidationDedupeEvent[] = []
+  const globalChange = changes.find((change): change is GlobalChange => change.action === 'replace-global')
+  const puts = changes.filter((change): change is PutChange => change.action === 'put')
+  const deleteChanges = changes.filter((change): change is DeleteChange => change.action === 'delete')
+  const deletedNames = new Set(deleteChanges.map(change => change.name))
+
+  // Phase A: fold each put against same-topic records that already exist.
+  const folded: PutChange[] = []
+  const pendingDeleteNames = new Set<string>()
+  for (const put of puts) {
+    const existing = input.workspace.records.find(record =>
+      record.name !== put.record.name
+      && !deletedNames.has(record.name)
+      && sameTopicPair(record, put.record))
+    if (existing === undefined) {
+      folded.push(put)
+      continue
+    }
+    // Content ordering follows length; the surviving NAME follows the mode.
+    const contentSurvivorIsNew = put.record.content.length >= existing.content.length
+    const nameSurvivorIsNew = mode === 'merge-delete' && contentSurvivorIsNew
+    const contentSurvivor = contentSurvivorIsNew ? put.record : existing
+    const contentAbsorbed = contentSurvivorIsNew ? existing : put.record
+    folded.push({
+      action: 'put',
+      record: {
+        name: nameSurvivorIsNew ? put.record.name : existing.name,
+        description: longerDescription(put.record, existing),
+        type: nameSurvivorIsNew ? put.record.type : existing.type,
+        content: mergedContent(contentSurvivor, contentAbsorbed),
+      },
+      evidence: put.evidence,
+    })
+    if (nameSurvivorIsNew) pendingDeleteNames.add(existing.name)
+    events.push({
+      kind: 'merged-put',
+      kept: nameSurvivorIsNew ? put.record.name : existing.name,
+      absorbed: nameSurvivorIsNew ? existing.name : put.record.name,
+      intersection: intersectionOf(existing, put.record),
+    })
+  }
+
+  // Phase B: fold the batch's own puts against each other. The first-comer
+  // keeps the name unless the other name is an existing record's name (so an
+  // existing record is never orphaned by its own update being folded away).
+  const existingNames = new Set(input.workspace.records.map(record => record.name))
+  const finalPuts: PutChange[] = []
+  for (const put of folded) {
+    const twin = finalPuts.find(other => other.record.name === put.record.name)
+    if (twin !== undefined) {
+      const survivor = put.record.content.length >= twin.record.content.length ? put.record : twin.record
+      const absorbed = survivor === put.record ? twin.record : put.record
+      twin.record = { ...survivor, description: longerDescription(survivor, absorbed), content: mergedContent(survivor, absorbed) }
+      events.push({ kind: 'merged-put', kept: twin.record.name, absorbed: put.record.name, intersection: intersectionOf(survivor, absorbed) })
+      continue
+    }
+    const related = finalPuts.find(other => other.record.name !== put.record.name && sameTopicPair(other.record, put.record))
+    if (related !== undefined) {
+      const survivor = put.record.content.length >= related.record.content.length ? put.record : related.record
+      const absorbed = survivor === put.record ? related.record : put.record
+      const keptName = existingNames.has(related.record.name) || !existingNames.has(put.record.name)
+        ? related.record.name
+        : put.record.name
+      related.record = {
+        name: keptName,
+        description: longerDescription(survivor, absorbed),
+        type: related.record.type,
+        content: mergedContent(survivor, absorbed),
+      }
+      events.push({ kind: 'merged-put', kept: keptName, absorbed: put.record.name, intersection: intersectionOf(survivor, absorbed) })
+      continue
+    }
+    finalPuts.push(put)
+  }
+
+  // A synthesized delete is skipped when the batch itself puts onto that name.
+  const synthesizedDeletes: DeleteChange[] = [...pendingDeleteNames]
+    .filter(name => !finalPuts.some(put => put.record.name === name))
+    .map(name => ({
+      action: 'delete' as const,
+      name,
+      evidence: puts.find(put => put.record.name !== name)!.evidence,
+    }))
+
+  // Global replacement: strip signpost sections that duplicate a fuller section.
+  let globalResult = globalChange
+  if (globalChange !== undefined) {
+    const stripped = stripSignpostSections(globalChange.content)
+    if (stripped !== globalChange.content) {
+      for (const heading of droppedSectionHeadings(globalChange.content, stripped)) {
+        events.push({ kind: 'dropped-signpost-section', heading })
+      }
+      globalResult = { ...globalChange, content: stripped }
+    }
+  }
+
+  const result: ConsolidationProposalChange[] = [
+    ...(globalResult === undefined ? [] : [globalResult]),
+    ...finalPuts,
+    ...deleteChanges,
+    ...synthesizedDeletes,
+  ]
+  result.sort(compareChanges)
+  return { changes: result, events }
+}
+
+/** Multiset diff of `##` section headings, used to report stripped sections. */
+function droppedSectionHeadings(before: string, after: string): string[] {
+  const count = (source: string) => {
+    const counts = new Map<string, number>()
+    for (const match of source.matchAll(/^##\s+(.+)$/gm)) {
+      const heading = match[1].trim()
+      counts.set(heading, (counts.get(heading) ?? 0) + 1)
+    }
+    return counts
+  }
+  const beforeCounts = count(before)
+  const afterCounts = count(after)
+  const dropped: string[] = []
+  for (const [heading, occurrences] of beforeCounts) {
+    const remaining = afterCounts.get(heading) ?? 0
+    for (let index = remaining; index < occurrences; index++) dropped.push(heading)
+  }
+  return dropped
 }
