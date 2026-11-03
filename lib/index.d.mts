@@ -342,12 +342,32 @@ type ConsolidationProposal = {
   readonly outcome: 'changes';
   readonly changes: readonly ConsolidationProposalChange[];
 };
+/**
+ * Deterministic dedupe applied to a parsed proposal before it is previewed and
+ * committed. `merge` (default) only rewrites the proposal; `merge-delete`
+ * additionally lets a fuller new record replace an existing one by name.
+ */
+type ConsolidationDedupeMode = 'off' | 'merge' | 'merge-delete';
+/** Audit trail of one dedupe pass, recorded to the consolidation debug log. */
+type ConsolidationDedupeEvent = {
+  readonly kind: 'merged-put';
+  readonly kept: string;
+  readonly absorbed: string;
+  readonly intersection: number;
+} | {
+  readonly kind: 'dropped-signpost-section';
+  readonly heading: string;
+} | {
+  readonly kind: 'dedupe-failed';
+  readonly error: string;
+};
 /** Canonical proposal plus the exact Workspace generation it would produce. */
 interface ConsolidationProposalPlan {
   readonly proposal: ConsolidationProposal;
   readonly globalBefore: GlobalMemoryView$1;
   readonly globalPreview: GlobalMemoryPreview;
   readonly preview: WorkspaceMemoryPreview;
+  readonly dedupe?: readonly ConsolidationDedupeEvent[];
 }
 //#endregion
 //#region src/consolidation-debug.d.ts
@@ -388,6 +408,7 @@ interface MemoryLlmCatalog {
 interface ConsolidationSettingsView {
   readonly selection: ConsolidationModelSelection;
   readonly debugEnabled: boolean;
+  readonly dedupe: ConsolidationDedupeMode;
   readonly revision: MemoryRevision;
 }
 /** Plugin-owned settings file; memory Markdown remains the only authoritative memory data. */
@@ -401,6 +422,7 @@ declare class ConsolidationSettingsStore {
     expectedRevision: MemoryRevision;
     selection: ConsolidationModelSelection;
     debugEnabled: boolean;
+    dedupe?: ConsolidationDedupeMode;
   }): {
     status: 'committed';
     revision: MemoryRevision;
@@ -598,7 +620,8 @@ declare class SessionConsolidator {
   private readonly version;
   private readonly excludeCwd;
   private readonly isArchived;
-  constructor(store: MarkdownMemoryStore, persistence: MemorySessionPersistence, agents: MemoryAgentRegistry, version?: string, excludeCwd?: (cwd: string) => boolean, isArchived?: (sessionId: string) => boolean);
+  private readonly dedupeMode;
+  constructor(store: MarkdownMemoryStore, persistence: MemorySessionPersistence, agents: MemoryAgentRegistry, version?: string, excludeCwd?: (cwd: string) => boolean, isArchived?: (sessionId: string) => boolean, dedupeMode?: () => ConsolidationDedupeMode);
   /** Observe, inspect, and re-observe one Session before exposing its complete logical events. */
   prepare(sessionId: string, signal?: AbortSignal): Promise<SessionConsolidationInput>;
   /** Validate one untrusted worker result against its frozen source and target generations. */
@@ -801,7 +824,8 @@ declare class ConsolidationReplayError extends Error {
 declare class WorkerSessionPlanReplay implements ConsolidationPlanReplay {
   private readonly persistence;
   private readonly consolidator;
-  constructor(persistence: MemorySessionPersistence, consolidator: SessionConsolidator);
+  private readonly dedupeMode;
+  constructor(persistence: MemorySessionPersistence, consolidator: SessionConsolidator, dedupeMode?: () => ConsolidationDedupeMode);
   loadPlan(workerSessionId: string, input: SessionConsolidationInput, signal?: AbortSignal): Promise<ConsolidationProposalPlan>;
   loadRecoveryPlan(workerSessionId: string, receipt: ConsolidationReceipt, workspace: WorkspaceMemoryView, signal?: AbortSignal): Promise<ConsolidationProposalPlan>;
 }
