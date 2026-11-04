@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { MemorySessionSnapshot } from '../src/host-contracts.ts'
 import { MarkdownMemoryStore } from '../src/memory-store.ts'
 import { SessionCatalog } from '../src/session-catalog.ts'
@@ -223,6 +223,72 @@ describe('Session candidate catalog', () => {
     ] })
     await expect(catalog.list(controller.signal)).resolves.toMatchObject({ sessions: [] })
     expect(attempts).toBe(2)
+  })
+
+  it('probes candidates concurrently and skips sessions that static checks already exclude', async () => {
+    const memory = store()
+    const live = snapshot('live-one', 'source:a', 4, '/work/project-alpha')
+    const pendingA = snapshot('probe-a', 'source:b', 3, '/work/project-alpha')
+    const pendingB = snapshot('probe-b', 'source:c', 2, '/work/project-alpha')
+    const started: string[] = []
+    let active = 0
+    let peak = 0
+    const gate: Array<() => void> = []
+    const catalog = new SessionCatalog(memory, {
+      async listSnapshots() { return [live, pendingA, pendingB] },
+    }, {
+      get(id) { return id === 'live-one' ? { session: {} } : undefined },
+    }, undefined, undefined, undefined, () => false, async (id) => {
+      started.push(id)
+      active += 1
+      peak = Math.max(peak, active)
+      await new Promise<void>(resolve => gate.push(resolve))
+      active -= 1
+      return [{ seq: 0, type: 'user/message', data: { source: { kind: 'user' }, content: id } }]
+    })
+
+    const listing = catalog.list()
+    await vi.waitFor(() => expect(started).toHaveLength(2))
+    expect(started).not.toContain('live-one')
+    expect(peak).toBe(2)
+    gate.forEach(resolve => resolve())
+    await expect(listing).resolves.toMatchObject({ sessions: [
+      { sessionId: 'live-one', eligible: false, reason: 'live' },
+      { sessionId: 'probe-a', eligible: true },
+      { sessionId: 'probe-b', eligible: true },
+    ] })
+  })
+
+  it('persists probe verdicts beside the store and skips them after a reload', async () => {
+    const memory = store()
+    const target = snapshot('shell', 'source:a', 1, '/work/project-alpha')
+    const persistence = { async listSnapshots() { return [target] } }
+    let probes = 0
+    const makeCatalog = () => new SessionCatalog(memory, persistence, { get() { return undefined } }, undefined, undefined, undefined, () => false, async () => {
+      probes += 1
+      return [{ seq: 0, type: 'session', data: {} }]
+    })
+    await makeCatalog().list()
+    expect(probes).toBe(1)
+    await expect(makeCatalog().list()).resolves.toMatchObject({ sessions: [] })
+    expect(probes).toBe(1)
+  })
+
+  it('reprobes a session whose revision changed since the persisted verdict', async () => {
+    const memory = store()
+    let revision = 'source:a'
+    const persistence = {
+      async listSnapshots() { return [{ ...snapshot('shell', 'source:a', 1, '/work/project-alpha'), revision }] },
+    }
+    let probes = 0
+    const makeCatalog = () => new SessionCatalog(memory, persistence, { get() { return undefined } }, undefined, undefined, undefined, () => false, async () => {
+      probes += 1
+      return [{ seq: 0, type: 'session', data: {} }]
+    })
+    await makeCatalog().list()
+    revision = 'source:b'
+    await makeCatalog().list()
+    expect(probes).toBe(2)
   })
 
   it('reads live and cold titles from projection cuts without loading Session logs', async () => {

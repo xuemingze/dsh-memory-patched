@@ -13,6 +13,7 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { parse, stringify } from 'yaml'
 import type {
@@ -502,13 +503,48 @@ function warnUnreadableRecord(path: string, error: unknown): void {
   console.warn(`[dsh-memory] ignoring unreadable workspace record ${path}: ${message}`)
 }
 
-/** Resolve `$DSH_HOME/memory`, falling back to `~/.dsh/memory`. */
+/**
+ * Locate `<profile>/.dsh/memory` when this bundle lives inside a profile's
+ * node_modules: profile-installed copies sit at
+ * `<dsh-home>/profiles/<name>/node_modules/<pkg>/lib/index.mjs`, so walking up
+ * to the `node_modules` ancestor yields the profile directory that owns the
+ * durable library. Desktop hosts never set process-level `DSH_HOME` (it is
+ * only injected into shell tool overlays), so this anchor is the only reliable
+ * way to find the profile library without guessing from HOME.
+ */
+export function profileAdjacentMemoryRoot(moduleUrl: string): string | undefined {
+  if (!moduleUrl.startsWith('file:')) return undefined
+  let dir = dirname(fileURLToPath(moduleUrl))
+  for (let hop = 0; hop < 10; hop += 1) {
+    const parent = dirname(dir)
+    if (basename(parent) === 'node_modules') {
+      const candidate = join(dirname(parent), '.dsh', 'memory')
+      return existsSync(candidate) ? candidate : undefined
+    }
+    dir = parent
+  }
+  return undefined
+}
+
+/** Resolve the durable memory root for this installation. */
 export function defaultMemoryRoot(): string {
   const configured = process.env.DSH_HOME?.trim()
-  const dshHome = configured === undefined || configured === ''
-    ? join(process.env.HOME ?? process.env.USERPROFILE ?? homedir(), '.dsh')
-    : resolve(configured)
-  return join(dshHome, 'memory')
+  if (configured !== undefined && configured !== '') return join(resolve(configured), 'memory')
+  // A profile-adjacent library (this fork is always installed into a profile)
+  // outranks any home-based guess: HOME/USERPROFILE may point at a bare
+  // `.dsh` that a mis-resolved boot created earlier.
+  const adjacent = profileAdjacentMemoryRoot(import.meta.url)
+  if (adjacent !== undefined) return adjacent
+  // Only trust a fallback home whose `.dsh` actually exists: a bare HOME
+  // (MSYS-style or set by a wrapper) must not shadow the real Windows profile
+  // library, otherwise every Session boots against a fresh empty store.
+  const candidates = [process.env.HOME, process.env.USERPROFILE, homedir()]
+    .filter((home): home is string => typeof home === 'string' && home.trim() !== '')
+  for (const home of candidates) {
+    const candidate = join(home, '.dsh', 'memory')
+    if (existsSync(candidate)) return candidate
+  }
+  return join(candidates[0] ?? homedir(), '.dsh', 'memory')
 }
 
 function publishWorkspace(directory: string, records: readonly WorkspaceMemory[]): void {

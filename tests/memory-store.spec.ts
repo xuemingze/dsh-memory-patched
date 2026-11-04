@@ -1,12 +1,14 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   MarkdownMemoryStore,
   MemoryConflictError,
   MemoryValidationError,
+  profileAdjacentMemoryRoot,
 } from '../src/memory-store.ts'
 
 const roots: string[] = []
@@ -421,5 +423,38 @@ describe('MarkdownMemoryStore', () => {
     expect(memory.renderContext()).not.toContain('### Current Workspace Memory Index')
     expect(memory.renderContext()).not.toContain('Revision:')
     expect(memory.renderContext()).not.toContain('sha256:')
+  })
+})
+
+describe('profileAdjacentMemoryRoot', () => {
+  function makeProfileLayout(root: string, options: { withMemory?: boolean } = {}): string {
+    const libDir = join(root, 'profiles', 'demo', 'node_modules', '@x', 'pkg', 'lib')
+    mkdirSync(libDir, { recursive: true })
+    writeFileSync(join(libDir, 'index.mjs'), 'export default 1\n')
+    if (options.withMemory !== false) {
+      mkdirSync(join(root, 'profiles', 'demo', '.dsh', 'memory'), { recursive: true })
+    }
+    return join(libDir, 'index.mjs')
+  }
+
+  it('locates the profile memory root that hosts this bundle', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-profile-'))
+    roots.push(root)
+    const bundle = makeProfileLayout(root)
+    expect(profileAdjacentMemoryRoot(pathToFileURL(bundle).href))
+      .toBe(join(root, 'profiles', 'demo', '.dsh', 'memory'))
+    await Promise.resolve()
+  })
+
+  it('returns undefined when the adjacent profile carries no memory library', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-profile-'))
+    roots.push(root)
+    const bundle = makeProfileLayout(root, { withMemory: false })
+    expect(profileAdjacentMemoryRoot(pathToFileURL(bundle).href)).toBeUndefined()
+    await Promise.resolve()
+  })
+
+  it('ignores non-file module urls', () => {
+    expect(profileAdjacentMemoryRoot('https://example.com/pkg/index.mjs')).toBeUndefined()
   })
 })

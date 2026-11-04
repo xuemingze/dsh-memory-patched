@@ -218,7 +218,7 @@ describe('Host Cordis composition', () => {
     }, signal)).toMatchObject({ ok: false, error: { code: 'bad-request' } })
     expect(await rpcHandler?.('sessions/consolidate', { sessionId: 'session-eligible' }, signal))
       .toMatchObject({ ok: true, value: { status: 'no-change', recovered: false, attempt: 1, changeCount: 0 } })
-    expect(opened).toBe(api === 'handles' ? 5 : 0)
+    expect(opened).toBe(api === 'handles' ? 4 : 0)
     expect(closed).toBe(opened)
     expect(await rpcHandler?.('sessions/list', {}, signal)).toMatchObject({
       ok: true,
