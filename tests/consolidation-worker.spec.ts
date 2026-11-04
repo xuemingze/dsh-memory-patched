@@ -569,4 +569,77 @@ describe('SessionConsolidationWorker dedupe audit', () => {
     const second = readFileSync(join(debugRoot, input.reviewId, 'attempt-2.jsonl'), 'utf8')
     expect(second).not.toContain('"stage":"dedupe"')
   })
+
+  it('renders pendingCandidates in worker input only when non-empty', async () => {
+    const { input } = await inputAndConsolidator()
+    const renderedWithout = renderConsolidationWorkerInput(input)
+    expect(renderedWithout).not.toContain('pendingCandidates')
+
+    const withCandidates: SessionConsolidationInput = {
+      ...input,
+      pendingCandidates: [{
+        id: 'cand-01234567-0',
+        workspaceKey: 'workspace-test',
+        change: {
+          action: 'put',
+          record: { name: 'cand-fact', description: 'd', type: 'project', content: 'c' },
+          evidence: [{ fromSeq: 0, toSeq: 0 }],
+        },
+        reason: 'uncertain',
+        evidenceExcerpt: 'user mentioned something',
+        lastEvidenceTime: 1000,
+        origin: { reviewId: 'r1', sourceSessionId: 's1' },
+        proposedAt: '2026-11-04T00:00:00.000Z',
+      }],
+    }
+    const renderedWith = renderConsolidationWorkerInput(withCandidates)
+    expect(renderedWith).toContain('pendingCandidates')
+    expect(renderedWith).toContain('cand-01234567-0')
+    expect(renderedWith).toContain('cand-fact')
+  })
+
+  it('records candidate events to debug log and includes candidateCount in proposal-accepted', async () => {
+    const { input, consolidator } = await inputAndConsolidator()
+    const debugRoot = mkdtempSync(join(tmpdir(), 'dsh-memory-worker-debug-'))
+    roots.push(debugRoot)
+    const debug = new ConsolidationDebugLog(debugRoot)
+    const workspaceStarter = {
+      async prepare() {
+        return { cwd: '/work/memory-consolidation', attachSession: async () => undefined }
+      },
+    }
+
+    const proposalWithCandidates = {
+      outcome: 'no-change',
+      changes: [],
+      candidates: [{
+        action: 'put',
+        record: {
+          name: 'maybe-useful-rule',
+          description: 'A rule not yet certain.',
+          type: 'reference',
+          content: 'Keep an eye on this parameter.',
+        },
+        reason: 'uncertain',
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      }],
+    }
+
+    const host = new FakeWorkerHost({ kind: 'valid', proposal: proposalWithCandidates })
+    const result = await new SessionConsolidationWorker(
+      consolidator,
+      host.agents,
+      host.sessions,
+      {},
+      debug,
+      workspaceStarter,
+      async () => 2048,
+    ).run(input, 1)
+
+    expect(result.plan.parked).toHaveLength(1)
+    const log = readFileSync(join(debugRoot, input.reviewId, 'attempt-1.jsonl'), 'utf8')
+    expect(log).toContain('"stage":"candidates"')
+    expect(log).toContain('"kind":"parked"')
+    expect(log).toContain('"candidateCount":1')
+  })
 })

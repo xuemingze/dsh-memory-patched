@@ -18,6 +18,7 @@ import {
   type ConsolidationDedupeMode,
   type ConsolidationProposalPlan,
 } from './consolidation-proposal.ts'
+import type { ConsolidationCandidateEntry } from './consolidation-candidates.ts'
 import {
   projectConsolidationEvidence,
   type ConsolidationEvidenceTurn,
@@ -67,6 +68,7 @@ export interface SessionConsolidationInput {
     readonly index: string
     readonly records: readonly WorkspaceMemory[]
   }
+  readonly pendingCandidates?: readonly ConsolidationCandidateEntry[]
 }
 
 /** Prepares a replayable consolidation input without invoking a model or mutating memory. */
@@ -157,6 +159,10 @@ export class SessionConsolidator {
       global: input.global,
       workspace: input.workspace,
       dedupe: this.dedupeMode(),
+      pendingCandidates: input.pendingCandidates,
+      reviewId: input.reviewId,
+      sourceSessionId: input.source.sessionId,
+      workspaceKey: input.workspace.scope.key,
     })
   }
 

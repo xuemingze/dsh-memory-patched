@@ -105,12 +105,12 @@ export function parseConsolidationProposal(
     readonly sourceEvidence: readonly ConsolidationEvidenceTurn[]
     readonly global: GlobalMemoryView
     readonly workspace: WorkspaceMemoryView
-    readonly dedupe?: ConsolidationDedupeMode
-    readonly writeGate?: ConsolidationWriteGateMode
-    readonly pendingCandidates?: readonly ConsolidationCandidateEntry[]
-    readonly reviewId?: string
-    readonly sourceSessionId?: string
-    readonly workspaceKey?: string
+    readonly dedupe?: ConsolidationDedupeMode | undefined
+    readonly writeGate?: ConsolidationWriteGateMode | undefined
+    readonly pendingCandidates?: readonly ConsolidationCandidateEntry[] | undefined
+    readonly reviewId?: string | undefined
+    readonly sourceSessionId?: string | undefined
+    readonly workspaceKey?: string | undefined
   },
 ): ConsolidationProposalPlan {
   const candidate = requireRecord(value, 'proposal')
