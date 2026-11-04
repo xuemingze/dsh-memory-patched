@@ -164,7 +164,7 @@ async function inputAndConsolidator(): Promise<{
   const global = await store.readGlobal()
   const input: SessionConsolidationInput = {
     reviewId: `review-${'a'.repeat(64)}`,
-    consolidatorVersion: 'm3-multistep-global-v6',
+    consolidatorVersion: 'm3-multistep-global-v7',
     source: {
       sessionId: 'source-session',
       revision: 'source:a',

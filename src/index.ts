@@ -26,6 +26,7 @@ import { ConsolidationCommitCoordinator, ConsolidationReceiptStore } from './con
 import { WorkerSessionPlanReplay } from './consolidation-replay.ts'
 import { SessionConsolidationRunner } from './consolidation-runner.ts'
 import { ConsolidationDebugStore } from './consolidation-debug.ts'
+import { ConsolidationCandidatePool } from './consolidation-candidates.ts'
 import {
   ConsolidationSettingsStore,
   readConsolidationModelCatalog,
@@ -118,6 +119,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   const observations = new MemoryObservationRegistry(store)
   const receipts = new ConsolidationReceiptStore(join(store.root, 'reviews'))
   const consolidationSettings = new ConsolidationSettingsStore(store.root, workerConfig)
+  const candidatePool = new ConsolidationCandidatePool(join(store.root, 'candidates'))
   let workspaceRegistry: MemoryWorkspaceRegistry | undefined
   const workerWorkspace = new DedicatedConsolidationWorkspace(
     join(store.root, CONSOLIDATION_WORKSPACE_DIRECTORY),
@@ -225,6 +227,8 @@ export function apply(ctx: Context, config: Config = {}): void {
         undefined,
         excludesConsolidationWorkspace,
         () => consolidationSettings.read().dedupe,
+        () => consolidationSettings.read().writeGate,
+        candidatePool,
       )
       const selection = consolidationSettings.read().selection
       const worker = new SessionConsolidationWorker(
@@ -242,8 +246,13 @@ export function apply(ctx: Context, config: Config = {}): void {
         ),
       )
       const commits = new ConsolidationCommitCoordinator(store, consolidator, receipts)
-      const replay = new WorkerSessionPlanReplay(persistence, consolidator, () => consolidationSettings.read().dedupe)
-      const runner = new SessionConsolidationRunner(consolidator, worker, receipts, commits, replay, store, debug)
+      const replay = new WorkerSessionPlanReplay(
+        persistence,
+        consolidator,
+        () => consolidationSettings.read().dedupe,
+        () => consolidationSettings.read().writeGate,
+      )
+      const runner = new SessionConsolidationRunner(consolidator, worker, receipts, commits, replay, store, debug, candidatePool)
       sessionWorker = worker
       sessionRunner = runner
       return () => {

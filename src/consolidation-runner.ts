@@ -1,6 +1,7 @@
 /** Manual consolidation orchestration across preparation, worker, receipt, and commit. */
 
-import { ConsolidationProposalError } from './consolidation-proposal.ts'
+import { ConsolidationProposalError, type ConsolidationProposalPlan } from './consolidation-proposal.ts'
+import type { ConsolidationCandidateEntry, ConsolidationCandidatePool } from './consolidation-candidates.ts'
 import {
   ConsolidationCommitCoordinator,
   createFailedConsolidationReceipt,
@@ -53,6 +54,7 @@ export class SessionConsolidationRunner {
     private readonly replay: ConsolidationPlanReplay,
     private readonly memory: MarkdownMemoryStore,
     private readonly debug?: ConsolidationDebugStore,
+    private readonly candidatePool?: ConsolidationCandidatePool,
   ) {}
 
   async run(sessionId: string, signal?: AbortSignal): Promise<ConsolidationRunResult> {
@@ -70,7 +72,7 @@ export class SessionConsolidationRunner {
           throw new SessionConsolidationRunError('pending-recovery', 'committing receipt has no worker attempt')
         }
         const plan = await this.replay.loadPlan(attempt.workerSessionId, input, signal)
-        return this.commits.commitWithinReviewLock({
+        const result = await this.commits.commitWithinReviewLock({
           input,
           plan,
           attempt: attempt.attempt,
@@ -78,6 +80,10 @@ export class SessionConsolidationRunner {
           workerConfig: { provider: attempt.provider, model: attempt.model },
           ...(signal === undefined ? {} : { signal }),
         })
+        if (result.outcome === 'committed' || result.outcome === 'no-change') {
+          this.settleCandidates(input.workspace.scope.key, plan, input.pendingCandidates)
+        }
+        return result
       }
 
       const attempt = nextAttempt(existing)
@@ -91,7 +97,7 @@ export class SessionConsolidationRunner {
       })
       if (input.source.evidence.length === 0) {
         const plan = this.consolidator.planProposal(input, { outcome: 'no-change', changes: [] })
-        return this.commits.commitWithinReviewLock({
+        const result = await this.commits.commitWithinReviewLock({
           input,
           plan,
           attempt,
@@ -99,6 +105,10 @@ export class SessionConsolidationRunner {
           workerConfig,
           ...(signal === undefined ? {} : { signal }),
         })
+        if (result.outcome === 'committed' || result.outcome === 'no-change') {
+          this.settleCandidates(input.workspace.scope.key, plan, input.pendingCandidates)
+        }
+        return result
       }
       try {
         const produced = await this.worker.run(input, attempt, signal)
@@ -109,7 +119,7 @@ export class SessionConsolidationRunner {
           this.debug?.record(debugIdentity, 'temporal-guard', { stale: produced.plan.staleChanges })
         }
         try {
-          return await this.commits.commitWithinReviewLock({
+          const result = await this.commits.commitWithinReviewLock({
             input,
             plan: produced.plan,
             attempt,
@@ -117,6 +127,10 @@ export class SessionConsolidationRunner {
             workerConfig,
             ...(signal === undefined ? {} : { signal }),
           })
+          if (result.outcome === 'committed' || result.outcome === 'no-change') {
+            this.settleCandidates(input.workspace.scope.key, produced.plan, input.pendingCandidates)
+          }
+          return result
         } catch (error: unknown) {
           if (this.receipts.read(input.reviewId)?.state === 'committing'
             || error instanceof SessionConsolidationError) throw error
@@ -162,7 +176,11 @@ export class SessionConsolidationRunner {
         const target = this.memory.workspaceTargetForKey(receipt.workspaceKey)
         const workspace = await this.memory.readWorkspace(target)
         const plan = await this.replay.loadRecoveryPlan(attempt.workerSessionId, receipt, workspace, signal)
-        return await this.commits.recoverReceiptWithinReviewLock(receipt, target, plan)
+        const result = await this.commits.recoverReceiptWithinReviewLock(receipt, target, plan)
+        if (result.outcome === 'committed' || result.outcome === 'no-change') {
+          this.settleCandidates(receipt.workspaceKey, plan)
+        }
+        return result
       } catch (error: unknown) {
         if (signal?.aborted) throw error
         const current = this.receipts.read(pending.reviewId)
@@ -185,6 +203,24 @@ export class SessionConsolidationRunner {
       }
     })
   }
+  private settleCandidates(
+    workspaceKey: string,
+    plan: ConsolidationProposalPlan,
+    inputPendingCandidates?: readonly ConsolidationCandidateEntry[],
+  ): void {
+    if (this.candidatePool === undefined) return
+    try {
+      if (plan.parked !== undefined && plan.parked.length > 0) {
+        this.candidatePool.park(workspaceKey, plan.parked)
+      }
+      if (inputPendingCandidates !== undefined && inputPendingCandidates.length > 0) {
+        this.candidatePool.remove(workspaceKey, inputPendingCandidates.map(c => c.id))
+      }
+    } catch (cause: unknown) {
+      console.warn(`[dsh-memory] failed to settle candidate pool for ${workspaceKey}:`, cause)
+    }
+  }
+
 }
 
 export type SessionConsolidationRunErrorCode = 'pending-recovery' | 'worker-mismatch' | 'commit-failed'
