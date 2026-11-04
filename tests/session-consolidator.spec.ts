@@ -11,6 +11,7 @@ import {
 } from '../src/session-consolidator.ts'
 import { isConsolidationWorkspaceCwd } from '../src/consolidation-workspace.ts'
 import { ConsolidationCandidatePool } from '../src/consolidation-candidates.ts'
+import type { ConsolidationWriteGateMode } from '../src/consolidation-proposal.ts'
 
 const roots: string[] = []
 
@@ -245,7 +246,7 @@ describe('SessionConsolidator input preparation', () => {
       proposedAt: '2026-11-04T00:00:00.000Z',
     }])
 
-    let gateMode = 'on' as const
+    let gateMode: ConsolidationWriteGateMode = 'on'
     const consolidator = new SessionConsolidator(
       store,
       {

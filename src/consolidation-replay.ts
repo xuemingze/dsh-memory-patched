@@ -1,6 +1,7 @@
 /** Rebuild an accepted proposal plan from a persisted worker Session. */
 
-import { parseConsolidationProposal, type ConsolidationDedupeMode, type ConsolidationProposalPlan } from './consolidation-proposal.ts'
+import { parseConsolidationProposal, type ConsolidationDedupeMode, type ConsolidationProposalPlan, type ConsolidationWriteGateMode } from './consolidation-proposal.ts'
+import { parseCandidateEntry, type ConsolidationCandidateEntry } from './consolidation-candidates.ts'
 import type { ConsolidationReceipt } from './consolidation-receipt.ts'
 import { CONSOLIDATION_PROPOSAL_TOOL } from './consolidation-worker.ts'
 import type { MemorySessionPersistence } from './host-contracts.ts'
@@ -36,6 +37,7 @@ export class WorkerSessionPlanReplay implements ConsolidationPlanReplay {
     private readonly persistence: MemorySessionPersistence,
     private readonly consolidator: SessionConsolidator,
     private readonly dedupeMode: () => ConsolidationDedupeMode = () => 'merge',
+    private readonly writeGateMode: () => ConsolidationWriteGateMode = () => 'on',
   ) {}
 
   async loadPlan(
@@ -66,11 +68,19 @@ export class WorkerSessionPlanReplay implements ConsolidationPlanReplay {
     if (replayedWorkspace.revision !== receipt.beforeRevision) {
       throw new ConsolidationReplayError('worker replay Workspace does not match the committing receipt')
     }
+    const pendingCandidates = Array.isArray(evidence.pendingCandidates)
+      ? evidence.pendingCandidates.map(parseCandidateEntry)
+      : undefined
     return parseConsolidationProposal(replayProposal(inspection.events), {
       sourceEvidence: evidence.sourceEvidence as SessionConsolidationInput['source']['evidence'],
       global: globalMemoryViewOf(evidence.globalMemory as string),
       workspace: replayedWorkspace,
       dedupe: this.dedupeMode(),
+      writeGate: this.writeGateMode(),
+      ...(pendingCandidates === undefined ? {} : { pendingCandidates }),
+      reviewId: receipt.reviewId,
+      sourceSessionId: receipt.sourceSessionId,
+      workspaceKey: receipt.workspaceKey,
     })
   }
 }
@@ -102,6 +112,16 @@ function replayEvidence(events: readonly unknown[]): Record<string, unknown> {
     || !Array.isArray(record.workspaceRecords)) {
     throw new ConsolidationReplayError('worker replay evidence has an invalid shape')
   }
+  if (record.pendingCandidates !== undefined) {
+    if (!Array.isArray(record.pendingCandidates)) {
+      throw new ConsolidationReplayError('worker replay evidence pendingCandidates must be an array')
+    }
+    try {
+      record.pendingCandidates.forEach(parseCandidateEntry)
+    } catch (cause: unknown) {
+      throw new ConsolidationReplayError('worker replay evidence pendingCandidates is invalid', { cause })
+    }
+  }
   return record
 }
 
@@ -110,7 +130,8 @@ function assertEvidenceMatchesInput(record: Record<string, unknown>, input: Sess
     || record.sourceSessionId !== input.source.sessionId
     || JSON.stringify(record.sourceEvidence) !== JSON.stringify(input.source.evidence)
     || record.globalMemory !== input.global.content
-    || JSON.stringify(record.workspaceRecords) !== JSON.stringify(input.workspace.records)) {
+    || JSON.stringify(record.workspaceRecords) !== JSON.stringify(input.workspace.records)
+    || JSON.stringify(record.pendingCandidates ?? []) !== JSON.stringify(input.pendingCandidates ?? [])) {
     throw new ConsolidationReplayError('worker replay evidence does not match the frozen review input')
   }
 }
@@ -126,7 +147,14 @@ function replayProposal(events: readonly unknown[]): unknown {
   const finals = calls.flatMap((source) => {
     try {
       const value = JSON.parse(source) as Record<string, unknown>
-      return value.final === true ? [{ outcome: value.outcome, changes: value.changes }] : []
+      return value.final === true
+        ? [{
+            outcome: value.outcome,
+            changes: value.changes,
+            ...(value.candidates !== undefined ? { candidates: value.candidates } : {}),
+            ...(value.candidateVerdicts !== undefined ? { candidateVerdicts: value.candidateVerdicts } : {}),
+          }]
+        : []
     } catch (cause: unknown) {
       throw new ConsolidationReplayError('worker proposal tool arguments are not valid JSON', { cause })
     }

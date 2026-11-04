@@ -142,4 +142,74 @@ describe('WorkerSessionPlanReplay', () => {
     message.content[0]!.text = message.content[0]!.text.replace(input.reviewId, `review-${'b'.repeat(64)}`)
     await expect(load(mismatched)).rejects.toThrow(/does not match/)
   })
-})
+  it('rebuilds plans with candidates and candidateVerdicts from worker replay events', async () => {
+    const { input: baseInput, consolidator } = await fixture()
+    const pending = [{
+      id: 'cand-00000000-0',
+      workspaceKey: baseInput.workspace.scope.key,
+      change: {
+        action: 'put' as const,
+        record: {
+          name: 'pending-admitted',
+          description: 'Admitted pending candidate.',
+          type: 'feedback' as const,
+          content: 'Admitted content.',
+        },
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      },
+      reason: 'uncertain' as const,
+      evidenceExcerpt: 'excerpt',
+      lastEvidenceTime: 1000,
+      origin: { reviewId: baseInput.reviewId, sourceSessionId: baseInput.source.sessionId },
+      proposedAt: '2026-11-04T00:00:00.000Z',
+    }]
+    const input: SessionConsolidationInput = {
+      ...baseInput,
+      pendingCandidates: pending,
+    }
+    const proposal = {
+      outcome: 'no-change',
+      changes: [],
+      candidates: [{
+        action: 'put',
+        record: {
+          name: 'new-parked-cand',
+          description: 'New candidate.',
+          type: 'reference',
+          content: 'Parked content.',
+        },
+        reason: 'thin',
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      }],
+      candidateVerdicts: [{ id: 'cand-00000000-0', verdict: 'pass' }],
+    }
+    const events = [
+      {
+        type: 'user/message',
+        seq: 0,
+        data: {
+          role: 'user',
+          source: { kind: 'plugin:dsh-memory' },
+          content: [{ type: 'text', text: renderConsolidationWorkerInput(input) }],
+        },
+      },
+      {
+        type: 'tool/call',
+        seq: 1,
+        data: { name: CONSOLIDATION_PROPOSAL_TOOL, arguments: JSON.stringify({ final: true, ...proposal }) },
+      },
+    ]
+
+    const replay = new WorkerSessionPlanReplay({
+      async listSnapshots() { return [] },
+      async inspect() { return { meta: { id: 'worker', createdAt: 1 }, events } },
+    }, consolidator)
+
+    const plan = await replay.loadPlan('worker', input)
+    expect(plan.proposal.outcome).toBe('changes')
+    expect(plan.preview.records.map(r => r.name)).toContain('pending-admitted')
+    expect(plan.parked).toHaveLength(1)
+    expect(plan.parked![0]!.change.action === 'put' && plan.parked![0]!.change.record.name).toBe('new-parked-cand')
+    expect(plan.candidateEvents).toContainEqual({ kind: 'admitted', id: 'cand-00000000-0', name: 'pending-admitted' })
+  })
+});
