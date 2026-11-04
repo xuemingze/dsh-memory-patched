@@ -15,6 +15,11 @@ import {
 import type { ConsolidationEvidenceTurn } from './consolidation-evidence.ts'
 import { chunkIntersection, demoteHeadings, isSameTopic, stripSignpostSections, textChunks } from './consolidation-dedupe.ts'
 import { redactCredentials } from './redact.ts'
+import {
+  CANDIDATE_REASONS,
+  type ConsolidationCandidateEntry,
+  type ConsolidationCandidateReason,
+} from './consolidation-candidates.ts'
 
 /** Inclusive source Session evidence interval. */
 export interface ConsolidationEvidenceRange {
@@ -64,6 +69,15 @@ export interface StaleConsolidationChange {
   readonly reason: 'stale-evidence'
 }
 
+export type ConsolidationWriteGateMode = 'off' | 'on'
+
+export type ConsolidationCandidateEvent =
+  | { readonly kind: 'parked'; readonly id: string; readonly name: string; readonly reason: ConsolidationCandidateReason }
+  | { readonly kind: 'admitted'; readonly id: string; readonly name: string }
+  | { readonly kind: 'blocked'; readonly id: string; readonly reason?: string }
+  | { readonly kind: 'candidate-stale'; readonly id: string; readonly name: string }
+  | { readonly kind: 'candidate-shadowed'; readonly id: string; readonly name: string }
+
 /** Canonical proposal plus the exact Workspace generation it would produce. */
 export interface ConsolidationProposalPlan {
   readonly proposal: ConsolidationProposal
@@ -72,6 +86,8 @@ export interface ConsolidationProposalPlan {
   readonly preview: WorkspaceMemoryPreview
   readonly dedupe?: readonly ConsolidationDedupeEvent[]
   readonly staleChanges?: readonly StaleConsolidationChange[]
+  readonly parked?: readonly ConsolidationCandidateEntry[]
+  readonly candidateEvents?: readonly ConsolidationCandidateEvent[]
 }
 
 /** Raised when an untrusted worker proposal violates the closed contract. */
@@ -90,10 +106,23 @@ export function parseConsolidationProposal(
     readonly global: GlobalMemoryView
     readonly workspace: WorkspaceMemoryView
     readonly dedupe?: ConsolidationDedupeMode
+    readonly writeGate?: ConsolidationWriteGateMode
+    readonly pendingCandidates?: readonly ConsolidationCandidateEntry[]
+    readonly reviewId?: string
+    readonly sourceSessionId?: string
+    readonly workspaceKey?: string
   },
 ): ConsolidationProposalPlan {
   const candidate = requireRecord(value, 'proposal')
-  requireExactKeys(candidate, ['outcome', 'changes'], 'proposal')
+  requireAllowedKeys(candidate, ['outcome', 'changes'], ['candidates', 'candidateVerdicts'], 'proposal')
+
+  const writeGate = input.writeGate ?? 'on'
+  if (writeGate === 'off') {
+    if (candidate.candidates !== undefined || candidate.candidateVerdicts !== undefined) {
+      throw new ConsolidationProposalError('writeGate is off; candidates and candidateVerdicts must not be supplied')
+    }
+  }
+
   if (!Array.isArray(candidate.changes)) {
     throw new ConsolidationProposalError('proposal.changes must be an array')
   }
@@ -101,17 +130,9 @@ export function parseConsolidationProposal(
     if (candidate.changes.length !== 0) {
       throw new ConsolidationProposalError('proposal.changes must be empty when outcome is no-change')
     }
-    return {
-      proposal: { outcome: 'no-change', changes: [] },
-      globalBefore: { ...input.global },
-      globalPreview: unchangedGlobalPreview(input.global),
-      preview: unchangedPreview(input.workspace),
-    }
-  }
-  if (candidate.outcome !== 'changes') {
+  } else if (candidate.outcome !== 'changes') {
     throw new ConsolidationProposalError('proposal.outcome must be no-change or changes')
-  }
-  if (candidate.changes.length === 0) {
+  } else if (candidate.changes.length === 0) {
     throw new ConsolidationProposalError('proposal.changes must be non-empty when outcome is changes')
   }
 
@@ -127,21 +148,174 @@ export function parseConsolidationProposal(
   }
   changes.sort(compareChanges)
 
+  const parsedCandidates: Array<{
+    name: string
+    change:
+      | { action: 'put'; record: WorkspaceMemory; evidence: ConsolidationEvidenceRange[] }
+      | { action: 'delete'; name: string; evidence: ConsolidationEvidenceRange[] }
+    reason: ConsolidationCandidateReason
+    evidence: ConsolidationEvidenceRange[]
+  }> = []
+
+  if (candidate.candidates !== undefined) {
+    if (!Array.isArray(candidate.candidates)) {
+      throw new ConsolidationProposalError('proposal.candidates must be an array')
+    }
+    const candidateNames = new Set<string>()
+    for (const [index, item] of candidate.candidates.entries()) {
+      const label = `proposal.candidates[${index}]`
+      const raw = requireRecord(item, label)
+      if (typeof raw.reason !== 'string' || !CANDIDATE_REASONS.includes(raw.reason as ConsolidationCandidateReason)) {
+        throw new ConsolidationProposalError(`${label}.reason must be one of ${CANDIDATE_REASONS.join(', ')}`)
+      }
+      const reason = raw.reason as ConsolidationCandidateReason
+      if (raw.action === 'put') {
+        requireExactKeys(raw, ['action', 'record', 'reason', 'evidence'], label)
+        const record = parseRecord(raw.record, `${label}.record`)
+        const ev = parseEvidence(raw.evidence, `${label}.evidence`, allowedEvidence)
+        if (candidateNames.has(record.name)) {
+          throw new ConsolidationProposalError(`proposal.candidates contains more than one candidate for ${record.name}`)
+        }
+        candidateNames.add(record.name)
+        parsedCandidates.push({ name: record.name, change: { action: 'put', record, evidence: ev }, reason, evidence: ev })
+      } else if (raw.action === 'delete') {
+        requireExactKeys(raw, ['action', 'name', 'reason', 'evidence'], label)
+        if (typeof raw.name !== 'string' || raw.name.trim() === '') {
+          throw new ConsolidationProposalError(`${label}.name must be a non-empty string`)
+        }
+        const ev = parseEvidence(raw.evidence, `${label}.evidence`, allowedEvidence)
+        if (candidateNames.has(raw.name)) {
+          throw new ConsolidationProposalError(`proposal.candidates contains more than one candidate for ${raw.name}`)
+        }
+        candidateNames.add(raw.name)
+        parsedCandidates.push({ name: raw.name, change: { action: 'delete', name: raw.name, evidence: ev }, reason, evidence: ev })
+      } else {
+        throw new ConsolidationProposalError(`${label}.action must be put or delete`)
+      }
+    }
+  }
+
+  for (const cand of parsedCandidates) {
+    if (names.has(cand.name)) {
+      throw new ConsolidationProposalError(`candidate name "${cand.name}" conflicts with a proposal change`)
+    }
+  }
+
+  const pending = input.pendingCandidates ?? []
+  const candidateEvents: ConsolidationCandidateEvent[] = []
+  const admittedChanges: ConsolidationProposalChange[] = []
+
+  if (pending.length > 0) {
+    if (!Array.isArray(candidate.candidateVerdicts)) {
+      throw new ConsolidationProposalError('proposal.candidateVerdicts must match the pending candidates exactly')
+    }
+    const verdicts = candidate.candidateVerdicts
+    if (verdicts.length !== pending.length) {
+      throw new ConsolidationProposalError('proposal.candidateVerdicts must match the pending candidates exactly')
+    }
+    const pendingIds = new Set(pending.map(p => p.id))
+    const seenIds = new Set<string>()
+    for (const [index, item] of verdicts.entries()) {
+      const label = `proposal.candidateVerdicts[${index}]`
+      const v = requireRecord(item, label)
+      requireAllowedKeys(v, ['id', 'verdict'], ['reason'], label)
+      if (typeof v.id !== 'string' || !pendingIds.has(v.id) || seenIds.has(v.id)) {
+        throw new ConsolidationProposalError('proposal.candidateVerdicts must match the pending candidates exactly')
+      }
+      if (v.verdict !== 'pass' && v.verdict !== 'block') {
+        throw new ConsolidationProposalError(`${label}.verdict must be pass or block`)
+      }
+      if (v.reason !== undefined && (typeof v.reason !== 'string' || v.reason.length > 500)) {
+        throw new ConsolidationProposalError(`${label}.reason must be a string up to 500 characters`)
+      }
+      seenIds.add(v.id)
+
+      const entry = pending.find(p => p.id === v.id)!
+      const candTargetName = entry.change.action === 'put' ? entry.change.record.name : entry.change.name
+
+      if (v.verdict === 'block') {
+        candidateEvents.push({
+          kind: 'blocked',
+          id: entry.id,
+          ...(typeof v.reason === 'string' && v.reason ? { reason: v.reason } : {}),
+        })
+      } else {
+        if (names.has(candTargetName)) {
+          candidateEvents.push({ kind: 'candidate-shadowed', id: entry.id, name: candTargetName })
+        } else {
+          const existingRecord = input.workspace.records.find(r => r.name === candTargetName)
+          if (existingRecord !== undefined && entry.lastEvidenceTime > 0 && entry.lastEvidenceTime < (existingRecord.lastEvidenceTime ?? 0)) {
+            candidateEvents.push({ kind: 'candidate-stale', id: entry.id, name: candTargetName })
+          } else {
+            candidateEvents.push({ kind: 'admitted', id: entry.id, name: candTargetName })
+            if (entry.change.action === 'put') {
+              admittedChanges.push({
+                action: 'put',
+                record: {
+                  ...entry.change.record,
+                  ...(entry.lastEvidenceTime > 0 ? { lastEvidenceTime: entry.lastEvidenceTime } : {}),
+                },
+                evidence: entry.change.evidence,
+              })
+            } else {
+              admittedChanges.push({
+                action: 'delete',
+                name: entry.change.name,
+                evidence: entry.change.evidence,
+              })
+            }
+          }
+        }
+      }
+    }
+  } else {
+    if (candidate.candidateVerdicts !== undefined) {
+      throw new ConsolidationProposalError('candidateVerdicts supplied without pending candidates')
+    }
+  }
+
+  const parked: ConsolidationCandidateEntry[] = []
+  const shortReviewId = candidatePrefix(input.reviewId)
+  const targetWorkspaceKey = input.workspaceKey ?? (pending[0]?.workspaceKey ?? 'workspace')
+  const originReviewId = input.reviewId ?? 'review-unknown'
+  const originSessionId = input.sourceSessionId ?? 'session-unknown'
+  const proposedAt = new Date().toISOString()
+
+  for (const [index, cand] of parsedCandidates.entries()) {
+    const id = `cand-${shortReviewId}-${index}`
+    const candEvidenceTime = evidenceTimeOf(cand.evidence, input.sourceEvidence)
+    const excerpt = excerptForEvidence(cand.evidence, input.sourceEvidence)
+    const candEntry: ConsolidationCandidateEntry = {
+      id,
+      workspaceKey: targetWorkspaceKey,
+      change: cand.change,
+      reason: cand.reason,
+      evidenceExcerpt: excerpt,
+      lastEvidenceTime: candEvidenceTime,
+      origin: { reviewId: originReviewId, sourceSessionId: originSessionId },
+      proposedAt,
+    }
+    parked.push(candEntry)
+    candidateEvents.push({ kind: 'parked', id, name: cand.name, reason: cand.reason })
+  }
+
   const guarded = applyTemporalGuard(changes, input)
   const guardedChanges = guarded.changes
   const stale = guarded.stale.length === 0 ? {} : { staleChanges: guarded.stale }
 
+  const combinedChanges = [...guardedChanges, ...admittedChanges].sort(compareChanges)
+
   const dedupeMode = input.dedupe ?? 'merge'
-  let effectiveChanges: readonly ConsolidationProposalChange[] = guardedChanges
+  let effectiveChanges: readonly ConsolidationProposalChange[] = combinedChanges
   let dedupeEvents: readonly ConsolidationDedupeEvent[] | undefined
   if (dedupeMode !== 'off') {
     try {
-      const applied = applyDedupe(guardedChanges, input, dedupeMode)
+      const applied = applyDedupe(combinedChanges, input, dedupeMode)
       effectiveChanges = applied.changes
       if (applied.events.length > 0) dedupeEvents = applied.events
     } catch (cause: unknown) {
       // Dedupe must never break consolidation: fall back to the untouched proposal.
-      effectiveChanges = guardedChanges
+      effectiveChanges = combinedChanges
       dedupeEvents = [{
         kind: 'dedupe-failed',
         error: redactCredentials(cause instanceof Error ? cause.message : String(cause)),
@@ -166,15 +340,28 @@ export function parseConsolidationProposal(
     throw cause
   }
   const dedupe = dedupeEvents === undefined ? {} : { dedupe: dedupeEvents }
+  const extraProps = {
+    ...dedupe,
+    ...stale,
+    ...(parked.length > 0 ? { parked } : {}),
+    ...(candidateEvents.length > 0 ? { candidateEvents } : {}),
+  }
+
   if (!globalPreview.changed && !preview.changed) {
     return {
       proposal: { outcome: 'no-change', changes: [] },
-      globalBefore: { ...input.global }, globalPreview, preview, ...dedupe, ...stale,
+      globalBefore: { ...input.global },
+      globalPreview,
+      preview,
+      ...extraProps,
     }
   }
   return {
     proposal: { outcome: 'changes', changes: effectiveChanges },
-    globalBefore: { ...input.global }, globalPreview, preview, ...dedupe, ...stale,
+    globalBefore: { ...input.global },
+    globalPreview,
+    preview,
+    ...extraProps,
   }
 }
 
@@ -604,4 +791,55 @@ function droppedSectionHeadings(before: string, after: string): string[] {
     for (let index = remaining; index < occurrences; index++) dropped.push(heading)
   }
   return dropped
+}
+
+function requireAllowedKeys(
+  record: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[],
+  label: string,
+): void {
+  const actual = Object.keys(record)
+  const actualSet = new Set(actual)
+  for (const req of required) {
+    if (!actualSet.has(req)) {
+      throw new ConsolidationProposalError(`${label} must contain exactly: ${required.join(', ')}`)
+    }
+  }
+  const allowed = new Set([...required, ...optional])
+  for (const key of actual) {
+    if (!allowed.has(key)) {
+      throw new ConsolidationProposalError(`${label} must contain exactly: ${required.join(', ')}`)
+    }
+  }
+}
+
+function candidatePrefix(reviewId: string | undefined): string {
+  if (reviewId !== undefined && reviewId.startsWith('review-')) {
+    const raw = reviewId.slice(7)
+    if (raw.length >= 8) return raw.slice(0, 8)
+  }
+  return '00000000'
+}
+
+function excerptForEvidence(
+  evidence: readonly ConsolidationEvidenceRange[],
+  turns: readonly ConsolidationEvidenceTurn[],
+): string {
+  for (const range of evidence) {
+    for (const turn of turns) {
+      if (turn.fromSeq <= range.toSeq && turn.toSeq >= range.fromSeq) {
+        if (turn.user.length > 0 && turn.user[0]) {
+          return turn.user[0].slice(0, 240)
+        }
+        if (turn.summaries.length > 0 && turn.summaries[0]) {
+          return turn.summaries[0].slice(0, 240)
+        }
+        if (turn.assistantFinal) {
+          return turn.assistantFinal.slice(0, 240)
+        }
+      }
+    }
+  }
+  return ''
 }

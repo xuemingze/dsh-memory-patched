@@ -586,3 +586,251 @@ describe('consolidation temporal guard', () => {
     expect(merged.content).toContain('可用')
   })
 })
+
+describe('candidate pool and write gate (two-stage admission)', () => {
+  it('parks candidates when proposed alongside changes or no-change', async () => {
+    const target = await workspace()
+    const global = await target.store.readGlobal()
+    const planned = parseConsolidationProposal({
+      outcome: 'no-change',
+      changes: [],
+      candidates: [{
+        action: 'put',
+        record: {
+          name: 'uncertain-fact',
+          description: 'A fact not yet verified.',
+          type: 'reference',
+          content: 'User mentioned a tentative plan.',
+        },
+        reason: 'uncertain',
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      }],
+    }, {
+      sourceEvidence: evidence,
+      global,
+      workspace: target.view,
+      reviewId: 'review-1234567890abcdef',
+      sourceSessionId: 'session-source',
+    })
+
+    expect(planned.proposal.outcome).toBe('no-change')
+    expect(planned.parked).toHaveLength(1)
+    expect(planned.parked![0]).toMatchObject({
+      id: 'cand-12345678-0',
+      reason: 'uncertain',
+      evidenceExcerpt: 'first',
+      origin: { reviewId: 'review-1234567890abcdef', sourceSessionId: 'session-source' },
+    })
+    expect(planned.candidateEvents).toEqual([
+      { kind: 'parked', id: 'cand-12345678-0', name: 'uncertain-fact', reason: 'uncertain' },
+    ])
+  })
+
+  it('rejects candidates with invalid reasons or duplicate names', async () => {
+    const target = await workspace()
+    const global = await target.store.readGlobal()
+    expect(() => parseConsolidationProposal({
+      outcome: 'no-change',
+      changes: [],
+      candidates: [{
+        action: 'put',
+        record: { name: 'f1', description: 'd', type: 'feedback', content: 'c' },
+        reason: 'bad-reason',
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      }],
+    }, { sourceEvidence: evidence, global, workspace: target.view })).toThrow(ConsolidationProposalError)
+
+    expect(() => parseConsolidationProposal({
+      outcome: 'no-change',
+      changes: [],
+      candidates: [
+        { action: 'put', record: { name: 'dup', description: 'd', type: 'feedback', content: 'c1' }, reason: 'thin', evidence: [{ fromSeq: 0, toSeq: 0 }] },
+        { action: 'put', record: { name: 'dup', description: 'd', type: 'feedback', content: 'c2' }, reason: 'thin', evidence: [{ fromSeq: 1, toSeq: 1 }] },
+      ],
+    }, { sourceEvidence: evidence, global, workspace: target.view })).toThrow(/more than one candidate for dup/)
+  })
+
+  it('rejects candidate names that collide with proposal changes', async () => {
+    const target = await workspace()
+    const global = await target.store.readGlobal()
+    expect(() => parseConsolidationProposal({
+      outcome: 'changes',
+      changes: [{
+        action: 'put',
+        record: { name: 'clashing-name', description: 'd', type: 'feedback', content: 'c' },
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      }],
+      candidates: [{
+        action: 'put',
+        record: { name: 'clashing-name', description: 'd2', type: 'feedback', content: 'c2' },
+        reason: 'uncertain',
+        evidence: [{ fromSeq: 1, toSeq: 1 }],
+      }],
+    }, { sourceEvidence: evidence, global, workspace: target.view })).toThrow(/candidate name "clashing-name" conflicts with a proposal change/)
+  })
+
+  it('rejects candidates and verdicts when writeGate is off', async () => {
+    const target = await workspace()
+    const global = await target.store.readGlobal()
+    expect(() => parseConsolidationProposal({
+      outcome: 'no-change',
+      changes: [],
+      candidates: [{
+        action: 'put',
+        record: { name: 'cand1', description: 'd', type: 'feedback', content: 'c' },
+        reason: 'uncertain',
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      }],
+    }, { sourceEvidence: evidence, global, workspace: target.view, writeGate: 'off' })).toThrow(/writeGate is off/)
+  })
+
+  it('requires verdicts to match pending candidates exactly', async () => {
+    const target = await workspace()
+    const global = await target.store.readGlobal()
+    const pending = [{
+      id: 'cand-00000000-0',
+      workspaceKey: 'workspace-test',
+      change: {
+        action: 'put' as const,
+        record: { name: 'pending-fact', description: 'd', type: 'project' as const, content: 'c' },
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      },
+      reason: 'uncertain' as const,
+      evidenceExcerpt: 'e',
+      lastEvidenceTime: 100,
+      origin: { reviewId: 'r1', sourceSessionId: 's1' },
+      proposedAt: '2026-11-04T00:00:00.000Z',
+    }]
+
+    // Missing verdict when pending exists
+    expect(() => parseConsolidationProposal({
+      outcome: 'no-change',
+      changes: [],
+    }, { sourceEvidence: evidence, global, workspace: target.view, pendingCandidates: pending })).toThrow(/must match the pending candidates exactly/)
+
+    // Supplying verdicts when no pending candidates exist
+    expect(() => parseConsolidationProposal({
+      outcome: 'no-change',
+      changes: [],
+      candidateVerdicts: [{ id: 'cand-00000000-0', verdict: 'pass' }],
+    }, { sourceEvidence: evidence, global, workspace: target.view })).toThrow(/candidateVerdicts supplied without pending candidates/)
+  })
+
+  it('admits and blocks candidates based on verdicts, producing changes and events', async () => {
+    const target = await workspace()
+    const global = await target.store.readGlobal()
+    const pending = [
+      {
+        id: 'cand-pass-0',
+        workspaceKey: 'workspace-test',
+        change: {
+          action: 'put' as const,
+          record: { name: 'admitted-rule', description: 'Now verified.', type: 'project' as const, content: 'Verified rule.\\n' },
+          evidence: [{ fromSeq: 0, toSeq: 0 }],
+        },
+        reason: 'uncertain' as const,
+        evidenceExcerpt: 'ex',
+        lastEvidenceTime: 500,
+        origin: { reviewId: 'r1', sourceSessionId: 's1' },
+        proposedAt: '2026-11-04T00:00:00.000Z',
+      },
+      {
+        id: 'cand-block-1',
+        workspaceKey: 'workspace-test',
+        change: {
+          action: 'put' as const,
+          record: { name: 'rejected-noise', description: 'Noise.', type: 'feedback' as const, content: 'Noise.\\n' },
+          evidence: [{ fromSeq: 1, toSeq: 1 }],
+        },
+        reason: 'thin' as const,
+        evidenceExcerpt: 'ex',
+        lastEvidenceTime: 500,
+        origin: { reviewId: 'r1', sourceSessionId: 's1' },
+        proposedAt: '2026-11-04T00:00:00.000Z',
+      },
+    ]
+
+    const planned = parseConsolidationProposal({
+      outcome: 'no-change',
+      changes: [],
+      candidateVerdicts: [
+        { id: 'cand-pass-0', verdict: 'pass' },
+        { id: 'cand-block-1', verdict: 'block', reason: 'just conversational noise' },
+      ],
+    }, { sourceEvidence: evidence, global, workspace: target.view, pendingCandidates: pending })
+
+    expect(planned.proposal.outcome).toBe('changes')
+    expect(planned.preview.records.map(r => r.name)).toContain('admitted-rule')
+    expect(planned.candidateEvents).toEqual([
+      { kind: 'admitted', id: 'cand-pass-0', name: 'admitted-rule' },
+      { kind: 'blocked', id: 'cand-block-1', reason: 'just conversational noise' },
+    ])
+  })
+
+  it('drops stale admitted candidates and shadows candidates with current proposal changes', async () => {
+    const target = await workspace()
+    const global = await target.store.readGlobal()
+    // Workspace already has stable-rule with lastEvidenceTime = 1000
+    // We add a record with a known lastEvidenceTime
+    const initialView = target.view
+    const pending = [
+      {
+        id: 'cand-stale-0',
+        workspaceKey: 'workspace-test',
+        change: {
+          action: 'put' as const,
+          record: { name: 'stable-rule', description: 'Old update.', type: 'feedback' as const, content: 'Old content.' },
+          evidence: [{ fromSeq: 0, toSeq: 0 }],
+        },
+        reason: 'uncertain' as const,
+        evidenceExcerpt: 'ex',
+        lastEvidenceTime: 500, // older than 1000
+        origin: { reviewId: 'r1', sourceSessionId: 's1' },
+        proposedAt: '2026-11-04T00:00:00.000Z',
+      },
+      {
+        id: 'cand-shadowed-1',
+        workspaceKey: 'workspace-test',
+        change: {
+          action: 'put' as const,
+          record: { name: 'active-change', description: 'Pending candidate.', type: 'project' as const, content: 'Candidate text.' },
+          evidence: [{ fromSeq: 0, toSeq: 0 }],
+        },
+        reason: 'thin' as const,
+        evidenceExcerpt: 'ex',
+        lastEvidenceTime: 1200,
+        origin: { reviewId: 'r1', sourceSessionId: 's1' },
+        proposedAt: '2026-11-04T00:00:00.000Z',
+      },
+    ]
+
+    const clockedEvidence = [
+      { fromSeq: 0, toSeq: 0, time: 2000, user: ['user text'], summaries: [], assistantFinal: null, tools: [] },
+    ]
+
+    // Simulate existing record having lastEvidenceTime: 1000
+    const existingWithTime = {
+      ...initialView,
+      records: initialView.records.map(r => r.name === 'stable-rule' ? { ...r, lastEvidenceTime: 1000 } : r),
+    }
+
+    const planned = parseConsolidationProposal({
+      outcome: 'changes',
+      changes: [{
+        action: 'put',
+        record: { name: 'active-change', description: 'Fresh update.', type: 'project', content: 'Fresh text from worker.' },
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      }],
+      candidateVerdicts: [
+        { id: 'cand-stale-0', verdict: 'pass' },
+        { id: 'cand-shadowed-1', verdict: 'pass' },
+      ],
+    }, { sourceEvidence: clockedEvidence, global, workspace: existingWithTime, pendingCandidates: pending })
+
+    expect(planned.candidateEvents).toContainEqual({ kind: 'candidate-stale', id: 'cand-stale-0', name: 'stable-rule' })
+    expect(planned.candidateEvents).toContainEqual({ kind: 'candidate-shadowed', id: 'cand-shadowed-1', name: 'active-change' })
+    // Active change survives
+    expect(planned.preview.records.find(r => r.name === 'active-change')?.content).toContain('Fresh text from worker')
+  })
+})
+
