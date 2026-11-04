@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 import { parse, stringify } from 'yaml'
 import type { ConsolidationWorkerConfig } from './consolidation-worker.ts'
 import { redactCredentials } from './redact.ts'
-import type { ConsolidationDedupeMode } from './consolidation-proposal.ts'
+import type { ConsolidationDedupeMode, ConsolidationWriteGateMode } from './consolidation-proposal.ts'
 import type {
   ConsolidationModelCatalogResponse,
   ConsolidationModelSelection,
@@ -35,6 +35,7 @@ export interface ConsolidationSettingsView {
   readonly selection: ConsolidationModelSelection
   readonly debugEnabled: boolean
   readonly dedupe: ConsolidationDedupeMode
+  readonly writeGate: ConsolidationWriteGateMode
   readonly revision: MemoryRevision
 }
 
@@ -68,7 +69,7 @@ export class ConsolidationSettingsStore {
   }
 
   private fallbackSettings(): Omit<ConsolidationSettingsView, 'revision'> {
-    return { selection: validateSelection(this.defaults), debugEnabled: false, dedupe: 'merge' }
+    return { selection: validateSelection(this.defaults), debugEnabled: false, dedupe: 'merge', writeGate: 'on' }
   }
 
   commit(input: {
@@ -76,6 +77,7 @@ export class ConsolidationSettingsStore {
     selection: ConsolidationModelSelection
     debugEnabled: boolean
     dedupe?: ConsolidationDedupeMode
+    writeGate?: ConsolidationWriteGateMode
   }): { status: 'committed'; revision: MemoryRevision } | { status: 'conflict'; currentRevision: MemoryRevision } {
     const current = this.read()
     if (current.revision !== input.expectedRevision) {
@@ -86,6 +88,7 @@ export class ConsolidationSettingsStore {
       debugEnabled: validateDebugEnabled(input.debugEnabled),
       // Callers that predate the dedupe setting must not reset it.
       dedupe: input.dedupe === undefined ? current.dedupe : coerceDedupeModeStrict(input.dedupe),
+      writeGate: input.writeGate === undefined ? current.writeGate : coerceWriteGateStrict(input.writeGate),
     }
     mkdirSync(dirname(this.path), { recursive: true })
     const temporary = `${this.path}.tmp-${process.pid}-${randomUUID()}`
@@ -168,17 +171,23 @@ function parseSettings(source: string): Omit<ConsolidationSettingsView, 'revisio
   const record = value as Record<string, unknown>
   const keys = Object.keys(record).sort().join(',')
   if (record.format === 1 && keys === 'format,model,provider') {
-    return { selection: validateSelection({ provider: record.provider, model: record.model }), debugEnabled: false, dedupe: 'merge' }
+    return { selection: validateSelection({ provider: record.provider, model: record.model }), debugEnabled: false, dedupe: 'merge', writeGate: 'on' }
   }
-  // Files written before the dedupe setting lack the key: default it instead of
+  // Files written before the dedupe/candidates settings lack the keys: default them instead of
   // rejecting the file, so the model selection survives the upgrade in place.
-  if (record.format !== SETTINGS_FORMAT || (keys !== 'debug,format,model,provider' && keys !== 'debug,dedupe,format,model,provider')) {
+  const validV2Keys = [
+    'debug,format,model,provider',
+    'debug,dedupe,format,model,provider',
+    'candidates,debug,dedupe,format,model,provider',
+  ]
+  if (record.format !== SETTINGS_FORMAT || !validV2Keys.includes(keys)) {
     throw new TypeError('Memory consolidation settings have missing or unknown fields')
   }
   return {
     selection: validateSelection({ provider: record.provider, model: record.model }),
     debugEnabled: validateDebugEnabled(record.debug),
     dedupe: coerceDedupeMode(record.dedupe),
+    writeGate: coerceWriteGate(record.candidates),
   }
 }
 
@@ -215,6 +224,7 @@ function serializeSettings(settings: Omit<ConsolidationSettingsView, 'revision'>
     model: settings.selection.model,
     debug: settings.debugEnabled,
     dedupe: settings.dedupe,
+    candidates: settings.writeGate,
   }, { lineWidth: 0 })
 }
 
@@ -227,4 +237,15 @@ function safeDiagnosticMessage(error: unknown): string {
   return redactCredentials(message)
     .replace(/[\r\n]+/gu, ' ')
     .trim() || 'model catalog failed'
+}
+
+function coerceWriteGate(value: unknown): ConsolidationWriteGateMode {
+  return value === 'off' || value === 'on' ? value : 'on'
+}
+
+function coerceWriteGateStrict(value: ConsolidationWriteGateMode): ConsolidationWriteGateMode {
+  if (value !== 'off' && value !== 'on') {
+    throw new TypeError('consolidation writeGate must be one of off, on')
+  }
+  return value
 }

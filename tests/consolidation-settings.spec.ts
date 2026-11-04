@@ -35,7 +35,7 @@ describe('ConsolidationSettingsStore', () => {
     expect(committed.status).toBe('committed')
     expect(store.read().selection).toEqual({ provider: 'openai', model: 'gpt-small' })
     expect(store.read().debugEnabled).toBe(true)
-    expect(readFileSync(store.path, 'utf8')).toBe('format: 2\nprovider: openai\nmodel: gpt-small\ndebug: true\ndedupe: merge\n')
+    expect(readFileSync(store.path, 'utf8')).toBe('format: 2\nprovider: openai\nmodel: gpt-small\ndebug: true\ndedupe: merge\ncandidates: on\n')
     expect(store.commit({
       expectedRevision: initial.revision,
       selection: { provider: 'other', model: 'other' },
@@ -59,7 +59,7 @@ describe('ConsolidationSettingsStore', () => {
         debugEnabled: false,
       })).toMatchObject({ status: 'committed' })
       expect(readFileSync(join(root, 'settings.yml'), 'utf8'))
-        .toBe('format: 2\nprovider: default\nmodel: cheap\ndebug: false\ndedupe: merge\n')
+        .toBe('format: 2\nprovider: default\nmodel: cheap\ndebug: false\ndedupe: merge\ncandidates: on\n')
     } finally {
       warn.mockRestore()
     }
@@ -190,4 +190,51 @@ describe('dedupe setting', () => {
     })
     expect(store.read().dedupe).toBe('merge-delete')
   })
-})
+  it('reads legacy files with candidates defaulting to on', () => {
+    const { root, store } = setup()
+    writeFileSync(join(root, 'settings.yml'), 'format: 1\nprovider: existing\nmodel: cheap\n')
+    expect(store.read()).toMatchObject({ selection: { provider: 'existing', model: 'cheap' }, writeGate: 'on' })
+
+    writeFileSync(join(root, 'settings.yml'), 'format: 2\nprovider: existing\nmodel: cheap\ndebug: false\n')
+    expect(store.read()).toMatchObject({ selection: { provider: 'existing', model: 'cheap' }, writeGate: 'on' })
+
+    writeFileSync(join(root, 'settings.yml'), 'format: 2\nprovider: existing\nmodel: cheap\ndebug: false\ndedupe: merge\n')
+    expect(store.read()).toMatchObject({ selection: { provider: 'existing', model: 'cheap' }, writeGate: 'on' })
+  })
+
+  it('reads an explicit candidates mode from the six-key format', () => {
+    const { root, store } = setup()
+    writeFileSync(join(root, 'settings.yml'), 'format: 2\nprovider: existing\nmodel: cheap\ndebug: false\ndedupe: merge\ncandidates: off\n')
+    expect(store.read()).toMatchObject({ writeGate: 'off' })
+    writeFileSync(join(root, 'settings.yml'), 'format: 2\nprovider: existing\nmodel: cheap\ndebug: false\ndedupe: merge\ncandidates: on\n')
+    expect(store.read()).toMatchObject({ writeGate: 'on' })
+  })
+
+  it('coerces an invalid candidates value to on without losing the selection', () => {
+    const { root, store } = setup()
+    writeFileSync(join(root, 'settings.yml'), 'format: 2\nprovider: existing\nmodel: cheap\ndebug: false\ndedupe: merge\ncandidates: maybe\n')
+    expect(store.read()).toMatchObject({ selection: { provider: 'existing', model: 'cheap' }, writeGate: 'on' })
+  })
+
+  it('commit preserves candidates when omitted and writes it when given', () => {
+    const { root, store } = setup()
+    writeFileSync(join(root, 'settings.yml'), 'format: 2\nprovider: existing\nmodel: cheap\ndebug: false\ndedupe: merge\ncandidates: off\n')
+    const view = store.read()
+    expect(store.commit({
+      expectedRevision: view.revision,
+      selection: view.selection,
+      debugEnabled: view.debugEnabled,
+    })).toMatchObject({ status: 'committed' })
+    expect(store.read().writeGate).toBe('off')
+    expect(readFileSync(join(root, 'settings.yml'), 'utf8')).toContain('candidates: off')
+
+    const next = store.read()
+    store.commit({
+      expectedRevision: next.revision,
+      selection: next.selection,
+      debugEnabled: next.debugEnabled,
+      writeGate: 'on',
+    })
+    expect(store.read().writeGate).toBe('on')
+  })
+});

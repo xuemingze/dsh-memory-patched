@@ -10,6 +10,7 @@ import {
   SessionConsolidator,
 } from '../src/session-consolidator.ts'
 import { isConsolidationWorkspaceCwd } from '../src/consolidation-workspace.ts'
+import { ConsolidationCandidatePool } from '../src/consolidation-candidates.ts'
 
 const roots: string[] = []
 
@@ -224,4 +225,47 @@ describe('SessionConsolidator input preparation', () => {
     }, { get() { return undefined } })
     await expect(mismatch.prepare('source-session')).rejects.toMatchObject({ code: 'inspection-mismatch' })
   })
-})
+  it('injects pending candidates from candidate pool when writeGate is on and excludes them when off', async () => {
+    const store = createStore()
+    const poolDir = join(tmpdir(), 'dsh-test-pool-' + Date.now())
+    const pool = new ConsolidationCandidatePool(poolDir)
+    const scope = store.scopeForCwd('/work/project-alpha')
+    pool.park(scope.key, [{
+      id: 'cand-00000000-0',
+      workspaceKey: scope.key,
+      change: {
+        action: 'put',
+        record: { name: 'test-cand', description: 'desc', type: 'feedback', content: 'content' },
+        evidence: [{ fromSeq: 0, toSeq: 0 }],
+      },
+      reason: 'uncertain',
+      evidenceExcerpt: 'ex',
+      lastEvidenceTime: 100,
+      origin: { reviewId: 'r', sourceSessionId: 's' },
+      proposedAt: '2026-11-04T00:00:00.000Z',
+    }])
+
+    let gateMode = 'on' as const
+    const consolidator = new SessionConsolidator(
+      store,
+      {
+        async listSnapshots() { return [snapshot()] },
+        async inspect() { return inspection() },
+      },
+      { get() { return undefined } },
+      CONSOLIDATOR_VERSION,
+      undefined,
+      undefined,
+      () => gateMode,
+      pool,
+    )
+
+    const preparedOn = await consolidator.prepare('source-session')
+    expect(preparedOn.pendingCandidates).toHaveLength(1)
+    expect(preparedOn.pendingCandidates![0]!.id).toBe('cand-00000000-0')
+
+    gateMode = 'off'
+    const preparedOff = await consolidator.prepare('source-session')
+    expect(preparedOff.pendingCandidates).toBeUndefined()
+  })
+});

@@ -17,8 +17,9 @@ import {
   parseConsolidationProposal,
   type ConsolidationDedupeMode,
   type ConsolidationProposalPlan,
+  type ConsolidationWriteGateMode,
 } from './consolidation-proposal.ts'
-import type { ConsolidationCandidateEntry } from './consolidation-candidates.ts'
+import type { ConsolidationCandidateEntry, ConsolidationCandidatePool } from './consolidation-candidates.ts'
 import {
   projectConsolidationEvidence,
   type ConsolidationEvidenceTurn,
@@ -80,6 +81,8 @@ export class SessionConsolidator {
     private readonly version = CONSOLIDATOR_VERSION,
     private readonly excludeCwd: (cwd: string) => boolean = () => false,
     private readonly dedupeMode: () => ConsolidationDedupeMode = () => 'merge',
+    private readonly writeGateMode: () => ConsolidationWriteGateMode = () => 'on',
+    private readonly candidatePool?: ConsolidationCandidatePool,
   ) {}
 
   /** Observe, inspect, and re-observe one Session before exposing its complete logical events. */
@@ -132,6 +135,10 @@ export class SessionConsolidator {
       throw new SessionConsolidationError('unstable', `Session "${sessionId}" changed while preparing consolidation`)
     }
 
+    const pendingCandidates = (this.candidatePool !== undefined && this.writeGateMode() !== 'off')
+      ? this.candidatePool.listForInput(scope.key)
+      : undefined
+
     return {
       reviewId: reviewIdOf(this.version, first, scope.key),
       consolidatorVersion: this.version,
@@ -149,6 +156,7 @@ export class SessionConsolidator {
         index: workspace.index,
         records: workspace.records.map(record => ({ ...record })),
       },
+      ...(pendingCandidates !== undefined && pendingCandidates.length > 0 ? { pendingCandidates } : {}),
     }
   }
 
@@ -159,10 +167,11 @@ export class SessionConsolidator {
       global: input.global,
       workspace: input.workspace,
       dedupe: this.dedupeMode(),
-      pendingCandidates: input.pendingCandidates,
-      reviewId: input.reviewId,
-      sourceSessionId: input.source.sessionId,
-      workspaceKey: input.workspace.scope.key,
+      writeGate: this.writeGateMode(),
+      ...(input.pendingCandidates === undefined ? {} : { pendingCandidates: input.pendingCandidates }),
+      ...(input.reviewId === undefined ? {} : { reviewId: input.reviewId }),
+      ...(input.source?.sessionId === undefined ? {} : { sourceSessionId: input.source.sessionId }),
+      ...(input.workspace?.scope?.key === undefined ? {} : { workspaceKey: input.workspace.scope.key }),
     })
   }
 
