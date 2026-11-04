@@ -291,6 +291,33 @@ describe('Session candidate catalog', () => {
     expect(probes).toBe(2)
   })
 
+  it('caches the listing for the TTL window and invalidates on demand', async () => {
+    vi.useFakeTimers()
+    try {
+      const memory = store()
+      const target = snapshot('eligible', 'source:a', 1, '/work/project-alpha')
+      let scans = 0
+      const catalog = new SessionCatalog(memory, {
+        async listSnapshots() { scans += 1; return [target] },
+      }, { get() { return undefined } })
+
+      await catalog.list()
+      await catalog.list()
+      await catalog.list()
+      expect(scans).toBe(2) // 一次 list = 两次观测；TTL 内复用结果
+
+      catalog.invalidate()
+      await catalog.list()
+      expect(scans).toBe(4)
+
+      vi.advanceTimersByTime(5_001)
+      await catalog.list()
+      expect(scans).toBe(6)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('reads live and cold titles from projection cuts without loading Session logs', async () => {
     const memory = store()
     const live = snapshot('live', 'source:a', 2, '/work/project-alpha')

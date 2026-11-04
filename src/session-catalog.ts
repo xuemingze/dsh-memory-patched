@@ -17,6 +17,9 @@ import { isConsolidationWorkerSessionId } from './consolidation-identity.ts'
 /** Bounded probe fan-out: enough parallelism to hide I/O latency, few enough to stay polite. */
 const PROBE_CONCURRENCY = 6
 
+/** Repeated opens inside this window reuse the previous listing verbatim. */
+const LIST_TTL_MS = 5_000
+
 /** Durable verdicts live beside the store so a reload skips re-probing. */
 const PROBE_CACHE_FILENAME = 'probe-cache.json'
 
@@ -89,6 +92,7 @@ export class SessionCatalog {
 
   private readonly probeCache = new Map<string, SessionIneligibleReason | undefined>()
   private probeStore: ProbeVerdictStore | undefined
+  private listCache: { at: number; response: SessionListResponse } | undefined
 
   private probeVerdictStore(): ProbeVerdictStore {
     // Lazy: store.root is only available after construction; the file is read
@@ -99,9 +103,17 @@ export class SessionCatalog {
 
   /** Observe each snapshot twice and classify only unchanged, non-live Sessions as eligible. */
   async list(signal?: AbortSignal): Promise<SessionListResponse> {
-    const first = await this.persistence.listSnapshots(signal)
-    signal?.throwIfAborted()
-    const second = await this.persistence.listSnapshots(signal)
+    // A short TTL keeps repeated opens (tab switches, refreshes) instant; the
+    // consolidation RPC invalidates it so fresh receipts show immediately.
+    if (this.listCache !== undefined && Date.now() - this.listCache.at < LIST_TTL_MS) {
+      return { ...this.listCache.response, sessions: [...this.listCache.response.sessions] }
+    }
+    // The two observations are independent: run them concurrently so the
+    // stability check costs one host scan instead of two.
+    const [first, second] = await Promise.all([
+      this.persistence.listSnapshots(signal),
+      this.persistence.listSnapshots(signal),
+    ])
     signal?.throwIfAborted()
 
     const secondById = groupById(second)
@@ -148,7 +160,7 @@ export class SessionCatalog {
     }
     // Bounded-concurrency probing keeps the first list open fast even with
     // hundreds of uncached Sessions.
-    await this.probeAll(toProbe, signal, verdicts)
+    const failedProbes = await this.probeAll(toProbe, signal, verdicts)
     // Persist the merged verdict set (fresh probes + inherited cache) so a
     // reload skips re-probing; stale keys for vanished sessions drop out.
     probeStore.write(
@@ -167,26 +179,38 @@ export class SessionCatalog {
       // Empty shells are noise, not candidates: keep them out of the list entirely.
       .filter(session => session.reason !== 'empty')
       .sort((left, right) => right.createdAt - left.createdAt || left.sessionId.localeCompare(right.sessionId, 'en'))
-    return { available: true, sessions }
+    // A failed probe must not poison the TTL cache: the next refresh retries it.
+    if (failedProbes > 0) return { available: true, sessions }
+    const response: SessionListResponse = { available: true, sessions }
+    this.listCache = { at: Date.now(), response }
+    return { ...response, sessions: [...response.sessions] }
+  }
+
+  /** Drop the cached listing so the next open re-scans (used after consolidation commits). */
+  invalidate(): void {
+    this.listCache = undefined
   }
 
   private async probeAll(
     snapshots: readonly MemorySessionSnapshot[],
     signal: AbortSignal | undefined,
     verdicts: Map<string, SessionIneligibleReason | undefined>,
-  ): Promise<void> {
-    if (snapshots.length === 0 || this.probeEvents === undefined) return
+  ): Promise<number> {
+    if (snapshots.length === 0 || this.probeEvents === undefined) return 0
     let cursor = 0
+    let failed = 0
     const workers = Array.from({ length: Math.min(PROBE_CONCURRENCY, snapshots.length) }, async () => {
       while (cursor < snapshots.length) {
         signal?.throwIfAborted()
         const snapshot = snapshots[cursor]!
         cursor += 1
         const verdict = await this.probeSession(snapshot, signal)
+        if (verdict === undefined) failed += 1
         verdicts.set(snapshot.header.id, verdict)
       }
     })
     await Promise.all(workers)
+    return failed
   }
 
   private async probeSession(

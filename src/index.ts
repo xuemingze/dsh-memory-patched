@@ -451,6 +451,8 @@ async function handleMemoryRpc(
         if (runner === undefined) return badRequest('Session consolidation is unavailable in this Host profile')
         const debugLoggingEnabled = consolidationSettings.read().debugEnabled
         const result = await runner.run(input.sessionId, signal)
+        // Fresh receipts must show on the next list open: drop the TTL cache.
+        getSessionCatalog()?.invalidate()
         const latestAttempt = result.receipt.attempts.at(-1)?.attempt ?? 0
         return { ok: true, value: parseSessionConsolidateResponse({
           status: result.outcome,
