@@ -51,7 +51,7 @@ export interface MemorySectionInjected {
   readonly t: MemoryTranslate
 }
 
-type Tab = 'global' | 'workspaces' | 'sessions' | 'settings'
+type Tab = 'global' | 'workspaces' | 'sessions' | 'forgetting' | 'settings'
 type MemoryButtonVariant = 'default' | 'primary' | 'danger' | 'tab' | 'workspace'
 type ErrorState =
   | { readonly kind: 'global-conflict' }
@@ -458,6 +458,7 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
   const [sessionBusy, setSessionBusy] = useState(false)
   const [sessions, setSessions] = useState<SessionListResponse>()
   const [forgetting, setForgetting] = useState<ForgettingReportViewProps['report']>()
+  const [forgettingBusy, setForgettingBusy] = useState(false)
   const [selectedSessionWorkspaceKey, setSelectedSessionWorkspaceKey] = useState<string>()
   const [consolidatingSessionId, setConsolidatingSessionId] = useState<string>()
   const [consolidationResult, setConsolidationResult] = useState<{ sessionId: string; result: SessionConsolidateResponse }>()
@@ -579,9 +580,6 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
       const next = await props.api.listSessions(signal)
       const groups = groupSessionsByWorkspace(next.sessions)
       setSessions(next)
-      // The forgetting report is advisory: a failure here must not hide the
-      // Session list, so it is fetched separately and ignored on error.
-      setForgetting(await props.api.forgettingReport(signal).catch(() => undefined))
       setSelectedSessionWorkspaceKey(current => groups.some(group => group.key === current)
         ? current
         : groups[0]?.key)
@@ -589,6 +587,18 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
       if (!signal?.aborted) setError({ kind: 'message', value: cause instanceof Error ? cause.message : String(cause) })
     } finally {
       if (!signal?.aborted) setSessionBusy(false)
+    }
+  }
+
+  const refreshForgetting = async (signal?: AbortSignal): Promise<void> => {
+    setForgettingBusy(true)
+    setError(undefined)
+    try {
+      setForgetting(await props.api.forgettingReport(signal))
+    } catch (cause: unknown) {
+      if (!signal?.aborted) setError({ kind: 'message', value: cause instanceof Error ? cause.message : String(cause) })
+    } finally {
+      if (!signal?.aborted) setForgettingBusy(false)
     }
   }
 
@@ -665,6 +675,9 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
     await refresh()
     if (tab === 'workspaces') await refreshWorkspaces()
     if (tab === 'sessions') await refreshSessions()
+    // Forgetting is its own concern, so it refreshes on its own entry rather
+    // than piggybacking on the Session list.
+    if (tab === 'forgetting') await refreshForgetting()
     if (tab === 'settings') await refreshModels()
   }
 
@@ -752,7 +765,7 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
       </div>
 
       <nav style={memorySectionStyles.tabs} aria-label={t('sections')}>
-        {(['global', 'workspaces', 'sessions', 'settings'] as const).map(id => (
+        {(['global', 'workspaces', 'sessions', 'forgetting', 'settings'] as const).map(id => (
           <MemoryButton
             key={id}
             type="button"
@@ -931,9 +944,15 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
           </div>
           </div>
         </div>
+      ) : tab === 'forgetting' ? (
+        <div style={memorySectionStyles.panel}>
+          {forgettingBusy && forgetting === undefined ? <p>{t('loading')}</p> : null}
+          {forgetting === undefined
+            ? null
+            : <ForgettingReportView report={forgetting} t={t} />}
+        </div>
       ) : tab === 'sessions' ? (
         <div style={memorySectionStyles.sessionPanel}>
-          {forgetting === undefined ? null : <ForgettingReportView report={forgetting} t={t} />}
           <header style={memorySectionStyles.workspaceHeading}>
             <div>
               <h3 style={memorySectionStyles.workspaceTitle}>{t('sessionCandidates')}</h3>
