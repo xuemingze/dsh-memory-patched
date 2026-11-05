@@ -14,6 +14,7 @@ import {
 import { MemoryObservationRegistry } from './memory-observation.ts'
 import { MemoryGovernanceRegistry } from './memory-governance-registry.ts'
 import { MemoryGovernanceStore } from './memory-governance-store.ts'
+import { buildForgettingReport, type ForgettingRecordInput } from './memory-forgetting-report.ts'
 import type { MemoryToolExecution } from './host-contracts.ts'
 import { SessionCatalog } from './session-catalog.ts'
 import { adaptSessionPersistence } from './session-persistence-adapter.ts'
@@ -289,6 +290,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         () => sessionWorker,
         consolidationSettings,
         governance,
+        governanceStore,
         endpoint,
         payload,
         signal,
@@ -400,6 +402,41 @@ function createMemoryUpdateTool(store: MarkdownMemoryStore, observations: Memory
   })
 }
 
+/**
+ * Gather every Workspace record with the governance facts the lifecycle policy
+ * needs. A record without sidecar data is treated as active and freshly
+ * evidenced, so ungoverned memory is never proposed for hiding.
+ */
+function collectForgettingRecords(
+  store: MarkdownMemoryStore,
+  governanceStore: MemoryGovernanceStore,
+  _settings: ConsolidationSettingsStore,
+): ForgettingRecordInput[] {
+  const collected: ForgettingRecordInput[] = []
+  for (const workspace of store.listWorkspaces().workspaces) {
+    const view = store.readWorkspaceById(workspace.workspaceId)
+    if (view === undefined) continue
+    const document = governanceStore.read(workspace.workspaceId)
+    for (const record of view.records) {
+      const claim = document.claims.find(entry => entry.name === record.name)
+      collected.push({
+        name: record.name,
+        kind: claim?.kind ?? 'configuration',
+        volatility: claim?.volatility ?? 'stable',
+        importanceScore: claim?.importanceScore ?? 50,
+        lifecycle: claim?.lifecycle ?? 'active',
+        // No sidecar evidence means "assume current": the default must be
+        // visible, not forgotten.
+        lastEvidenceAt: claim?.lastEvidenceAt ?? Date.now(),
+        lastUsedAt: claim?.lastUsedAt ?? null,
+        superseded: claim?.lifecycle === 'superseded',
+        hasExtractedSop: false,
+      })
+    }
+  }
+  return collected
+}
+
 async function handleMemoryRpc(
   store: MarkdownMemoryStore,
   getSessionCatalog: () => SessionCatalog | undefined,
@@ -408,6 +445,7 @@ async function handleMemoryRpc(
   getSessionWorker: () => SessionConsolidationWorker | undefined,
   consolidationSettings: ConsolidationSettingsStore,
   governance: MemoryGovernanceRegistry,
+  governanceStore: MemoryGovernanceStore,
   endpoint: string,
   payload: unknown,
   signal: AbortSignal,
@@ -498,6 +536,18 @@ async function handleMemoryRpc(
         return { ok: true, value: parseConsolidationModelCatalogResponse(
           await readConsolidationModelCatalog(llm, consolidationSettings),
         ) }
+      }
+      case 'governance/forgetting': {
+        parseEmptyPayload(payload)
+        const mode = consolidationSettings.read().forgetting
+        // Shadow-only for now: the report describes what the policy *would* do
+        // and never writes. Acting on it needs its own explicit opt-in.
+        const records = collectForgettingRecords(store, governanceStore, consolidationSettings)
+        const report = buildForgettingReport(records, Date.now())
+        return {
+          ok: true,
+          value: { mode, changes: report.changes, counts: report.counts, protectedCount: report.protectedCount },
+        }
       }
       case 'governance/status':
         parseEmptyPayload(payload)

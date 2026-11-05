@@ -6,6 +6,7 @@ import {
   parseGlobalReplaceResponse,
   parseMemoryStatus,
   parseSessionListResponse,
+  parseForgettingReportResponse,
   parseSessionConsolidateResponse,
   parseConsolidationModelCatalogResponse,
   parseConsolidationModelSelectResponse,
@@ -87,6 +88,7 @@ function createMemoryApi(connection: BrowserConnection): MemoryApi {
     readWorkspace: async (workspaceId, signal) => parseWorkspaceReadResponse(await call('workspace/read', { workspaceId }, signal)),
     commitWorkspace: async (input, signal) => parseWorkspaceCommitResponse(await call('workspace/commit', input, signal)),
     listSessions: async signal => parseSessionListResponse(await call('sessions/list', {}, signal)),
+    forgettingReport: async signal => parseForgettingReportResponse(await call('governance/forgetting', {}, signal)),
     consolidateSession: async (sessionId, signal) => parseSessionConsolidateResponse(
       await call('sessions/consolidate', { sessionId }, signal),
     ),

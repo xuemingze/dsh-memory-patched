@@ -35,7 +35,7 @@ describe('ConsolidationSettingsStore', () => {
     expect(committed.status).toBe('committed')
     expect(store.read().selection).toEqual({ provider: 'openai', model: 'gpt-small' })
     expect(store.read().debugEnabled).toBe(true)
-    expect(readFileSync(store.path, 'utf8')).toBe('format: 2\nprovider: openai\nmodel: gpt-small\ndebug: true\ndedupe: merge\ncandidates: on\n')
+    expect(readFileSync(store.path, 'utf8')).toBe('format: 2\nprovider: openai\nmodel: gpt-small\ndebug: true\ndedupe: merge\ncandidates: on\nforgetting: shadow\n')
     expect(store.commit({
       expectedRevision: initial.revision,
       selection: { provider: 'other', model: 'other' },
@@ -59,10 +59,49 @@ describe('ConsolidationSettingsStore', () => {
         debugEnabled: false,
       })).toMatchObject({ status: 'committed' })
       expect(readFileSync(join(root, 'settings.yml'), 'utf8'))
-        .toBe('format: 2\nprovider: default\nmodel: cheap\ndebug: false\ndedupe: merge\ncandidates: on\n')
+        .toBe('format: 2\nprovider: default\nmodel: cheap\ndebug: false\ndedupe: merge\ncandidates: on\nforgetting: shadow\n')
     } finally {
       warn.mockRestore()
     }
+  })
+
+  it('defaults forgetting to shadow so nothing is hidden unasked', () => {
+    const { store } = setup()
+    // Shadow is the only safe default: it reports without acting.
+    expect(store.read().forgetting).toBe('shadow')
+  })
+
+  it('persists an explicit forgetting mode and preserves it across other commits', () => {
+    const { store } = setup()
+    const first = store.read()
+    const committed = store.commit({
+      expectedRevision: first.revision,
+      selection: first.selection,
+      debugEnabled: false,
+      forgetting: 'on',
+    })
+    expect(committed.status).toBe('committed')
+    expect(store.read().forgetting).toBe('on')
+
+    // A later commit that predates this setting must not reset it.
+    const current = store.read()
+    store.commit({
+      expectedRevision: current.revision,
+      selection: current.selection,
+      debugEnabled: true,
+    })
+    expect(store.read()).toMatchObject({ forgetting: 'on', debugEnabled: true })
+  })
+
+  it('rejects an unknown forgetting value on the write path', () => {
+    const { store } = setup()
+    const current = store.read()
+    expect(() => store.commit({
+      expectedRevision: current.revision,
+      selection: current.selection,
+      debugEnabled: false,
+      forgetting: 'sometimes' as never,
+    })).toThrow(/forgetting/u)
   })
 
   it('reads format 1 settings with debug logging disabled', () => {

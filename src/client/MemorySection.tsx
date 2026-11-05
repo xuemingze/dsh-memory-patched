@@ -33,6 +33,7 @@ export interface MemoryApi {
   readWorkspace(workspaceId: WorkspaceId, signal?: AbortSignal): Promise<WorkspaceReadResponse>
   commitWorkspace(input: WorkspaceCommitPayload, signal?: AbortSignal): Promise<WorkspaceCommitResponse>
   listSessions(signal?: AbortSignal): Promise<SessionListResponse>
+  forgettingReport(signal?: AbortSignal): Promise<ForgettingReportViewProps['report']>
   consolidateSession(sessionId: string, signal?: AbortSignal): Promise<SessionConsolidateResponse>
   readModels(signal?: AbortSignal): Promise<ConsolidationModelCatalogResponse>
   selectModel(input: {
@@ -376,6 +377,71 @@ export function SuppressedSessions(props: SuppressedSessionsProps): React.JSX.El
   )
 }
 
+/** Browser-side view of the shadow forgetting report. */
+export interface ForgettingReportViewProps {
+  readonly report: {
+    readonly mode: string
+    readonly changes: readonly {
+      readonly name: string
+      readonly from: string
+      readonly to: string
+      readonly importanceScore: number
+      readonly importanceClass: string
+      readonly reason: string
+    }[]
+    readonly counts: { readonly cooled: number; readonly archived: number; readonly restored: number }
+    readonly protectedCount: number
+  }
+  readonly t: MemoryTranslate
+}
+
+/**
+ * What forgetting would do, shown before it does anything.
+ *
+ * The report is descriptive only. There is deliberately no action here that
+ * removes a record: hiding is reversible and shown as such, while physical
+ * deletion is a separate act requiring the user to ask for it in so many words.
+ */
+export function ForgettingReportView(props: ForgettingReportViewProps): React.JSX.Element {
+  const { report, t } = props
+  const shadow = report.mode === 'shadow'
+  return (
+    <section data-memory-forgetting="" style={memorySectionStyles.sessionCard}>
+      <header style={memorySectionStyles.workspaceHeading}>
+        <div>
+          <strong>{t('forgettingTitle')}</strong>
+          <p style={memorySectionStyles.subtitle}>{t('forgettingHelp')}</p>
+        </div>
+        <span style={memorySectionStyles.muted}>{t('forgettingMode', { mode: report.mode })}</span>
+      </header>
+      {shadow ? <p style={memorySectionStyles.muted}>{t('forgettingShadowNote')}</p> : null}
+      {report.protectedCount > 0
+        ? <p style={{ ...memorySectionStyles.muted, ...memorySectionStyles.sessionId }}>
+            <strong>{t('forgettingProtected', { count: report.protectedCount })}</strong>
+            {' — '}
+            {t('forgettingProtectedHelp')}
+          </p>
+        : null}
+      {report.changes.length === 0
+        ? <p style={memorySectionStyles.muted}>{t('forgettingEmpty')}</p>
+        : <div style={memorySectionStyles.sessionList}>
+            {report.changes.map(change => (
+              <div key={change.name} data-memory-forgetting-change="">
+                <span>{t('forgettingChange', {
+                  name: change.name,
+                  from: change.from,
+                  to: change.to,
+                })}</span>
+                <small style={{ ...memorySectionStyles.sessionId, ...memorySectionStyles.muted }}>
+                  {t('forgettingReason', { reason: change.reason })}
+                </small>
+              </div>
+            ))}
+          </div>}
+    </section>
+  )
+}
+
 /** Render status plus Global, Workspaces, and Sessions tabs. */
 export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
   const { t } = props
@@ -391,6 +457,7 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
   const [workspaceDrafts, setWorkspaceDrafts] = useState<WorkspaceDraftRecord[]>([])
   const [sessionBusy, setSessionBusy] = useState(false)
   const [sessions, setSessions] = useState<SessionListResponse>()
+  const [forgetting, setForgetting] = useState<ForgettingReportViewProps['report']>()
   const [selectedSessionWorkspaceKey, setSelectedSessionWorkspaceKey] = useState<string>()
   const [consolidatingSessionId, setConsolidatingSessionId] = useState<string>()
   const [consolidationResult, setConsolidationResult] = useState<{ sessionId: string; result: SessionConsolidateResponse }>()
@@ -512,6 +579,9 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
       const next = await props.api.listSessions(signal)
       const groups = groupSessionsByWorkspace(next.sessions)
       setSessions(next)
+      // The forgetting report is advisory: a failure here must not hide the
+      // Session list, so it is fetched separately and ignored on error.
+      setForgetting(await props.api.forgettingReport(signal).catch(() => undefined))
       setSelectedSessionWorkspaceKey(current => groups.some(group => group.key === current)
         ? current
         : groups[0]?.key)
@@ -863,6 +933,7 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
         </div>
       ) : tab === 'sessions' ? (
         <div style={memorySectionStyles.sessionPanel}>
+          {forgetting === undefined ? null : <ForgettingReportView report={forgetting} t={t} />}
           <header style={memorySectionStyles.workspaceHeading}>
             <div>
               <h3 style={memorySectionStyles.workspaceTitle}>{t('sessionCandidates')}</h3>

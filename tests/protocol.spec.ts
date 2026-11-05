@@ -6,6 +6,7 @@ import {
   parseGlobalReplaceResponse,
   parseMemoryStatus,
   parseSessionListResponse,
+  parseForgettingReportResponse,
   parseSessionConsolidatePayload,
   parseSessionConsolidateResponse,
   parseConsolidationModelCatalogResponse,
@@ -241,6 +242,26 @@ describe('Memory RPC protocol', () => {
         content: 'Reserved.\n',
       } }],
     })).toThrow(/reserved/)
+    // Forgetting report: closed shape, and nothing may claim a destructive target.
+    expect(parseForgettingReportResponse({
+      mode: 'shadow',
+      changes: [{ name: 'r', from: 'active', to: 'cooled', importanceScore: 20, importanceClass: 'transient', reason: 'cooled' }],
+      counts: { cooled: 1, archived: 0, restored: 0 },
+      protectedCount: 3,
+    })).toMatchObject({ mode: 'shadow', protectedCount: 3 })
+    expect(() => parseForgettingReportResponse({
+      mode: 'shadow',
+      changes: [{ name: 'r', from: 'active', to: 'cooled', importanceScore: -1, importanceClass: 'transient', reason: 'cooled' }],
+      counts: { cooled: 1, archived: 0, restored: 0 },
+      protectedCount: 0,
+    })).toThrow(/importanceScore/)
+    expect(() => parseForgettingReportResponse({
+      mode: 'shadow',
+      changes: [],
+      counts: { cooled: 0, archived: 0, restored: 0 },
+      protectedCount: 0,
+      extra: true,
+    })).toThrow(/exactly/)
     expect(() => parseWorkspaceCommitResponse({ status: 'committed', revision: 'sha256:new', path: '/tmp' }))
       .toThrow(/exactly/)
     expect(() => parseSessionListResponse({ available: false, suppressed: { failedZeroOutput: 0, trivialAutomation: 0, groups: [] }, sessions: [{ sessionId: 'hidden' }] })).toThrow(/empty/)

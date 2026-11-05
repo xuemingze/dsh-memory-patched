@@ -36,8 +36,18 @@ export interface ConsolidationSettingsView {
   readonly debugEnabled: boolean
   readonly dedupe: ConsolidationDedupeMode
   readonly writeGate: ConsolidationWriteGateMode
+  /**
+   * How far automatic forgetting may act. `shadow` is the default: compute and
+   * report what would be cooled or archived without changing anything, because
+   * automatic removal must be opted into rather than assumed.
+   */
+  readonly forgetting: ForgettingMode
   readonly revision: MemoryRevision
 }
+
+/** How far automatic forgetting is allowed to act. */
+export type ForgettingMode = 'off' | 'shadow' | 'on'
+export const FORGETTING_MODES: readonly ForgettingMode[] = ['off', 'shadow', 'on']
 
 /** Plugin-owned settings file; memory Markdown remains the only authoritative memory data. */
 export class ConsolidationSettingsStore {
@@ -69,7 +79,13 @@ export class ConsolidationSettingsStore {
   }
 
   private fallbackSettings(): Omit<ConsolidationSettingsView, 'revision'> {
-    return { selection: validateSelection(this.defaults), debugEnabled: false, dedupe: 'merge', writeGate: 'on' }
+    return {
+      selection: validateSelection(this.defaults),
+      debugEnabled: false,
+      dedupe: 'merge',
+      writeGate: 'on',
+      forgetting: 'shadow',
+    }
   }
 
   commit(input: {
@@ -78,6 +94,7 @@ export class ConsolidationSettingsStore {
     debugEnabled: boolean
     dedupe?: ConsolidationDedupeMode
     writeGate?: ConsolidationWriteGateMode
+    forgetting?: ForgettingMode
   }): { status: 'committed'; revision: MemoryRevision } | { status: 'conflict'; currentRevision: MemoryRevision } {
     const current = this.read()
     if (current.revision !== input.expectedRevision) {
@@ -89,6 +106,9 @@ export class ConsolidationSettingsStore {
       // Callers that predate the dedupe setting must not reset it.
       dedupe: input.dedupe === undefined ? current.dedupe : coerceDedupeModeStrict(input.dedupe),
       writeGate: input.writeGate === undefined ? current.writeGate : coerceWriteGateStrict(input.writeGate),
+      // Same rule as dedupe/writeGate: a caller that predates this setting must
+      // not silently reset it to the default.
+      forgetting: input.forgetting === undefined ? current.forgetting : coerceForgettingStrict(input.forgetting),
     }
     mkdirSync(dirname(this.path), { recursive: true })
     const temporary = `${this.path}.tmp-${process.pid}-${randomUUID()}`
@@ -171,14 +191,22 @@ function parseSettings(source: string): Omit<ConsolidationSettingsView, 'revisio
   const record = value as Record<string, unknown>
   const keys = Object.keys(record).sort().join(',')
   if (record.format === 1 && keys === 'format,model,provider') {
-    return { selection: validateSelection({ provider: record.provider, model: record.model }), debugEnabled: false, dedupe: 'merge', writeGate: 'on' }
+    return {
+      selection: validateSelection({ provider: record.provider, model: record.model }),
+      debugEnabled: false,
+      dedupe: 'merge',
+      writeGate: 'on',
+      forgetting: 'shadow',
+    }
   }
-  // Files written before the dedupe/candidates settings lack the keys: default them instead of
-  // rejecting the file, so the model selection survives the upgrade in place.
+  // Files written before the dedupe/candidates/forgetting settings lack the keys:
+  // default them instead of rejecting the file, so the model selection survives
+  // the upgrade in place.
   const validV2Keys = [
     'debug,format,model,provider',
     'debug,dedupe,format,model,provider',
     'candidates,debug,dedupe,format,model,provider',
+    'candidates,debug,dedupe,forgetting,format,model,provider',
   ]
   if (record.format !== SETTINGS_FORMAT || !validV2Keys.includes(keys)) {
     throw new TypeError('Memory consolidation settings have missing or unknown fields')
@@ -188,7 +216,19 @@ function parseSettings(source: string): Omit<ConsolidationSettingsView, 'revisio
     debugEnabled: validateDebugEnabled(record.debug),
     dedupe: coerceDedupeMode(record.dedupe),
     writeGate: coerceWriteGate(record.candidates),
+    forgetting: coerceForgettingMode(record.forgetting),
   }
+}
+
+function coerceForgettingMode(value: unknown): ForgettingMode {
+  return value === 'off' || value === 'shadow' || value === 'on' ? value : 'shadow'
+}
+
+function coerceForgettingStrict(value: ForgettingMode): ForgettingMode {
+  if (value !== 'off' && value !== 'shadow' && value !== 'on') {
+    throw new TypeError('memory forgetting must be one of off, shadow, on')
+  }
+  return value
 }
 
 function coerceDedupeMode(value: unknown): ConsolidationDedupeMode {
@@ -225,6 +265,7 @@ function serializeSettings(settings: Omit<ConsolidationSettingsView, 'revision'>
     debug: settings.debugEnabled,
     dedupe: settings.dedupe,
     candidates: settings.writeGate,
+    forgetting: settings.forgetting,
   }, { lineWidth: 0 })
 }
 

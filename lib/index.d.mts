@@ -552,8 +552,16 @@ interface ConsolidationSettingsView {
   readonly debugEnabled: boolean;
   readonly dedupe: ConsolidationDedupeMode;
   readonly writeGate: ConsolidationWriteGateMode;
+  /**
+   * How far automatic forgetting may act. `shadow` is the default: compute and
+   * report what would be cooled or archived without changing anything, because
+   * automatic removal must be opted into rather than assumed.
+   */
+  readonly forgetting: ForgettingMode;
   readonly revision: MemoryRevision;
 }
+/** How far automatic forgetting is allowed to act. */
+type ForgettingMode = 'off' | 'shadow' | 'on';
 /** Plugin-owned settings file; memory Markdown remains the only authoritative memory data. */
 declare class ConsolidationSettingsStore {
   private readonly defaults;
@@ -567,6 +575,7 @@ declare class ConsolidationSettingsStore {
     debugEnabled: boolean;
     dedupe?: ConsolidationDedupeMode;
     writeGate?: ConsolidationWriteGateMode;
+    forgetting?: ForgettingMode;
   }): {
     status: 'committed';
     revision: MemoryRevision;

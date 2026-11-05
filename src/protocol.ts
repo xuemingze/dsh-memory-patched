@@ -119,6 +119,24 @@ export interface SuppressedSessionsSummary {
   readonly groups: SuppressedSessionGroup[]
 }
 
+/** One proposed lifecycle transition in the shadow forgetting report. */
+export interface ForgettingChangeView {
+  readonly name: string
+  readonly from: string
+  readonly to: string
+  readonly importanceScore: number
+  readonly importanceClass: string
+  readonly reason: string
+}
+
+/** Browser-safe view of the shadow forgetting report. */
+export interface ForgettingReportResponse {
+  readonly mode: string
+  readonly changes: readonly ForgettingChangeView[]
+  readonly counts: { readonly cooled: number; readonly archived: number; readonly restored: number }
+  readonly protectedCount: number
+}
+
 /** Session candidate capability and ordered persisted Session list. */
 export interface SessionListResponse {
   available: boolean
@@ -711,6 +729,42 @@ function requireWorkspaceMemoryName(value: unknown, label: string): string {
     throw new TypeError(`${label} cannot use the reserved name "${RESERVED_WORKSPACE_MEMORY_NAME}"`)
   }
   return value
+}
+
+/** Parse the shadow forgetting report on both sides of the wire. */
+export function parseForgettingReportResponse(value: unknown): ForgettingReportResponse {
+  const record = requireRecord(value, 'forgetting report response')
+  requireExactKeys(record, ['mode', 'changes', 'counts', 'protectedCount'], 'forgetting report response')
+  if (typeof record.mode !== 'string') throw new TypeError('forgetting report response.mode must be a string')
+  if (!Array.isArray(record.changes)) throw new TypeError('forgetting report response.changes must be an array')
+  const counts = requireRecord(record.counts, 'forgetting report response.counts')
+  requireExactKeys(counts, ['cooled', 'archived', 'restored'], 'forgetting report response.counts')
+  return {
+    mode: record.mode,
+    changes: record.changes.map((entry, index) => parseForgettingChange(entry, `forgetting report response.changes[${index}]`)),
+    counts: {
+      cooled: nonNegativeInteger(counts.cooled, 'forgetting report response.counts.cooled'),
+      archived: nonNegativeInteger(counts.archived, 'forgetting report response.counts.archived'),
+      restored: nonNegativeInteger(counts.restored, 'forgetting report response.counts.restored'),
+    },
+    protectedCount: nonNegativeInteger(record.protectedCount, 'forgetting report response.protectedCount'),
+  }
+}
+
+function parseForgettingChange(value: unknown, label: string): ForgettingChangeView {
+  const record = requireRecord(value, label)
+  requireExactKeys(record, ['name', 'from', 'to', 'importanceScore', 'importanceClass', 'reason'], label)
+  for (const key of ['name', 'from', 'to', 'importanceClass', 'reason'] as const) {
+    if (typeof record[key] !== 'string') throw new TypeError(`${label}.${key} must be a string`)
+  }
+  return {
+    name: record.name as string,
+    from: record.from as string,
+    to: record.to as string,
+    importanceScore: nonNegativeInteger(record.importanceScore, `${label}.importanceScore`),
+    importanceClass: record.importanceClass as string,
+    reason: record.reason as string,
+  }
 }
 
 function isSessionIneligibleReason(value: unknown): value is SessionIneligibleReason {
