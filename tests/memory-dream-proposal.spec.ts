@@ -175,8 +175,12 @@ describe('Dream scoring and risk', () => {
 })
 
 describe('Dream proposal envelopes', () => {
-  it('rejects an empty action list', () => {
-    expect(() => parseDreamProposal(proposal([]), context())).toThrow(/at least one/u)
+  it('accepts an empty action list as no change', () => {
+    // Rejecting this would force the model to invent work to satisfy the schema,
+    // which is how a librarian turns into an author.
+    const plan = parseDreamProposal(proposal([]), context())
+    expect(plan.actions).toHaveLength(0)
+    expect(plan.risk).toBe('metadata-only')
   })
 
   it('rejects unknown fields at the envelope level', () => {

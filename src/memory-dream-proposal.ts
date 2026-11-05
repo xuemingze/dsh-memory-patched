@@ -153,7 +153,8 @@ export function parseDreamProposal(value: unknown, context: DreamProposalContext
   const record = requireRecord(value, 'dream proposal')
   requireExactKeys(record, ['actions'], 'dream proposal')
   if (!Array.isArray(record.actions)) throw new DreamProposalError('dream proposal.actions must be an array')
-  if (record.actions.length === 0) throw new DreamProposalError('dream proposal must carry at least one action')
+  // An explicit empty plan is a valid answer: "nothing here needs reorganising".
+  // Rejecting it would push the model to invent work to satisfy the schema.
   if (record.actions.length > MAX_DREAM_ACTIONS) {
     throw new DreamProposalError(`dream proposal carries too many actions (max ${MAX_DREAM_ACTIONS})`)
   }
