@@ -506,8 +506,15 @@ function toRunView(receipt: {
   }
 }
 
-/** Dream's output budget: the plan is short; the room is for corrections. */
-const DREAM_MAX_TOKENS = 8_192
+/**
+ * Dream's output budget.
+ *
+ * The plan itself is short, but the input is wide (one workspace's whole record
+ * set), and a model that deliberates can exhaust the budget before submitting —
+ * which is exactly how the consolidation worker failed on 2026-11-04 with 8k.
+ * Matched to the consolidation ceiling for that reason.
+ */
+const DREAM_MAX_TOKENS = 16_384
 
 /** Payload for per-action approval: the fingerprints the user ticked. */
 function parseDreamApprovalPayload(payload: unknown): { runId: string; approved: string[] } {
