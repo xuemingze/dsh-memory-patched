@@ -137,6 +137,189 @@ export interface ForgettingReportResponse {
   readonly protectedCount: number
 }
 
+/** One action in a Dream plan, as shown to the user before approval. */
+export interface DreamActionView {
+  readonly action: string
+  readonly target: string
+  readonly sources?: readonly string[]
+  readonly rationale?: string
+}
+
+/**
+ * A Dream plan awaiting a decision.
+ *
+ * Carries handles only. The prose each handle names stays in Markdown, so this
+ * view can be shown in the browser without duplicating memory content.
+ */
+export interface DreamPlanResponse {
+  readonly runId: string
+  readonly scopeKey: string
+  readonly state: 'planned'
+  readonly risk: string
+  readonly proposalHash: string
+  readonly actions: readonly DreamActionView[]
+  readonly createdAt: number
+}
+
+/** A finished Dream run: what it decided and whether it took effect. */
+export interface DreamRunResponse {
+  readonly runId: string
+  readonly scopeKey: string
+  readonly state: string
+  readonly risk: string
+  readonly proposalHash: string
+  readonly beforeRevision: string
+  readonly afterRevision: string
+  readonly changes: readonly DreamActionView[]
+  readonly createdAt: number
+  readonly error?: string
+}
+
+export class DreamProtocolError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'DreamProtocolError'
+  }
+}
+
+/** The states a stored Dream run may report. */
+const DREAM_RUN_STATES = [
+  'committed', 'no-change', 'rejected', 'stale-scope',
+  'output-truncated', 'provider-failed', 'internal-error',
+] as const
+
+const DREAM_RISKS = ['metadata-only', 'content-change'] as const
+
+function dreamRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new DreamProtocolError(`${label} must be an object`)
+  }
+  return value as Record<string, unknown>
+}
+
+function dreamExactKeys(
+  record: Record<string, unknown>,
+  required: readonly string[],
+  label: string,
+  optional: readonly string[] = [],
+): void {
+  const allowed = new Set([...required, ...optional])
+  for (const key of required) {
+    if (!(key in record)) throw new DreamProtocolError(`${label} is missing: ${key}`)
+  }
+  for (const key of Object.keys(record)) {
+    if (!allowed.has(key)) throw new DreamProtocolError(`${label} has unknown field: ${key}`)
+  }
+}
+
+function dreamText(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value === '') {
+    throw new DreamProtocolError(`${label} must be a non-empty string`)
+  }
+  return value
+}
+
+function dreamTime(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new DreamProtocolError(`${label} must be a number`)
+  }
+  return value
+}
+
+function parseDreamActions(value: unknown, label: string): DreamActionView[] {
+  if (!Array.isArray(value)) throw new DreamProtocolError(`${label} must be an array`)
+  return value.map((entry, index) => {
+    const record = dreamRecord(entry, `${label}[${index}]`)
+    dreamExactKeys(record, ['action', 'target'], `${label}[${index}]`, ['sources', 'rationale'])
+    const sources = record.sources
+    if (sources !== undefined && (!Array.isArray(sources) || sources.some(item => typeof item !== 'string'))) {
+      throw new DreamProtocolError(`${label}[${index}].sources must be a list of record names`)
+    }
+    return {
+      action: dreamText(record.action, `${label}[${index}].action`),
+      target: dreamText(record.target, `${label}[${index}].target`),
+      ...(sources === undefined ? {} : { sources: sources as string[] }),
+      ...(record.rationale === undefined
+        ? {}
+        : { rationale: dreamText(record.rationale, `${label}[${index}].rationale`) }),
+    }
+  })
+}
+
+/** Parse a plan awaiting approval. */
+export function parseDreamPlanResponse(value: unknown): DreamPlanResponse {
+  const record = dreamRecord(value, 'dream plan')
+  dreamExactKeys(
+    record,
+    ['runId', 'scopeKey', 'state', 'risk', 'proposalHash', 'actions', 'createdAt'],
+    'dream plan',
+  )
+  if (record.state !== 'planned') {
+    throw new DreamProtocolError('dream plan.state must be "planned"')
+  }
+  if (!DREAM_RISKS.includes(record.risk as (typeof DREAM_RISKS)[number])) {
+    throw new DreamProtocolError(`dream plan.risk must be one of: ${DREAM_RISKS.join(', ')}`)
+  }
+  return {
+    runId: dreamText(record.runId, 'dream plan.runId'),
+    scopeKey: dreamText(record.scopeKey, 'dream plan.scopeKey'),
+    state: 'planned',
+    risk: record.risk as string,
+    proposalHash: dreamText(record.proposalHash, 'dream plan.proposalHash'),
+    actions: parseDreamActions(record.actions, 'dream plan.actions'),
+    createdAt: dreamTime(record.createdAt, 'dream plan.createdAt'),
+  }
+}
+
+/**
+ * Parse the Dream panel payload: staged plans plus recent runs.
+ *
+ * Each element is validated through the single-plan and single-run parsers, so
+ * a malformed entry is rejected rather than rendered half-populated.
+ */
+export function parseDreamPanelResponse(value: unknown): {
+  pending: DreamPlanResponse[]
+  runs: DreamRunResponse[]
+} {
+  const record = dreamRecord(value, 'dream panel')
+  dreamExactKeys(record, ['pending', 'runs'], 'dream panel')
+  if (!Array.isArray(record.pending)) throw new DreamProtocolError('dream panel.pending must be an array')
+  if (!Array.isArray(record.runs)) throw new DreamProtocolError('dream panel.runs must be an array')
+  return {
+    pending: record.pending.map((entry, index) => parseDreamPlanResponse(entry)),
+    runs: record.runs.map((entry, index) => parseDreamRunResponse(entry)),
+  }
+}
+
+/** Parse a finished run. */
+export function parseDreamRunResponse(value: unknown): DreamRunResponse {
+  const record = dreamRecord(value, 'dream run')
+  dreamExactKeys(
+    record,
+    ['runId', 'scopeKey', 'state', 'risk', 'proposalHash', 'beforeRevision', 'afterRevision', 'changes', 'createdAt'],
+    'dream run',
+    ['error'],
+  )
+  if (!DREAM_RUN_STATES.includes(record.state as (typeof DREAM_RUN_STATES)[number])) {
+    throw new DreamProtocolError(`dream run.state must be one of: ${DREAM_RUN_STATES.join(', ')}`)
+  }
+  if (!DREAM_RISKS.includes(record.risk as (typeof DREAM_RISKS)[number])) {
+    throw new DreamProtocolError(`dream run.risk must be one of: ${DREAM_RISKS.join(', ')}`)
+  }
+  return {
+    runId: dreamText(record.runId, 'dream run.runId'),
+    scopeKey: dreamText(record.scopeKey, 'dream run.scopeKey'),
+    state: record.state as string,
+    risk: record.risk as string,
+    proposalHash: dreamText(record.proposalHash, 'dream run.proposalHash'),
+    beforeRevision: dreamText(record.beforeRevision, 'dream run.beforeRevision'),
+    afterRevision: dreamText(record.afterRevision, 'dream run.afterRevision'),
+    changes: parseDreamActions(record.changes, 'dream run.changes'),
+    createdAt: dreamTime(record.createdAt, 'dream run.createdAt'),
+    ...(record.error === undefined ? {} : { error: dreamText(record.error, 'dream run.error') }),
+  }
+}
+
 /** Session candidate capability and ordered persisted Session list. */
 export interface SessionListResponse {
   available: boolean

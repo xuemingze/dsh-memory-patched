@@ -16,7 +16,7 @@ const source = readFileSync(
 )
 
 /** The tab ids the section declares. */
-const TABS = ['global', 'workspaces', 'sessions', 'forgetting', 'settings'] as const
+const TABS = ['global', 'workspaces', 'sessions', 'forgetting', 'dream', 'settings'] as const
 
 function changeTabBody(): string {
   const start = source.indexOf('const changeTab = (next: Tab): void => {')

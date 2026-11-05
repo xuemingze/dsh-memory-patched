@@ -419,3 +419,65 @@ describe('Dream runner', () => {
     expect(receipts.list().map(entry => entry.runId)).toEqual(['r2', 'r1'])
   })
 })
+describe('Two-phase Dream run', () => {
+  it('plans without writing, then applies only after approval', async () => {
+    const { planDreamSession, approveDreamPlan } = await import('../src/memory-dream-receipt.ts')
+    const store = seed()
+    const receipts = new DreamReceiptStore(root)
+    const before = store.read('scope-a').revision
+
+    const pending = await planDreamSession({
+      receipts, context: context(), runId: 'phase-1', config: {}, now: NOW,
+      callModel: async () => ({ actions: [{ action: 'cool', target: 'alpha' }] }),
+    })
+    expect(pending.planned).toBe(true)
+    // Planning alone must not touch the store.
+    expect(store.read('scope-a').revision).toBe(before)
+    expect(receipts.read('phase-1')).toBeUndefined()
+
+    const applied = approveDreamPlan({ store, receipts, runId: 'phase-1', now: NOW + 1 })
+    expect(applied.receipt.state).toBe('committed')
+    expect(store.read('scope-a').claims.find(entry => entry.name === 'alpha')?.lifecycle).toBe('cooled')
+    // The pending copy is consumed once approved.
+    expect(receipts.readPending('phase-1')).toBeUndefined()
+  })
+
+  it('discards a pending plan without touching the store', async () => {
+    const { planDreamSession, discardDreamPlan } = await import('../src/memory-dream-receipt.ts')
+    const store = seed()
+    const receipts = new DreamReceiptStore(root)
+    const before = store.read('scope-a').revision
+
+    await planDreamSession({
+      receipts, context: context(), runId: 'phase-2', config: {}, now: NOW,
+      callModel: async () => ({ actions: [{ action: 'cool', target: 'alpha' }] }),
+    })
+    discardDreamPlan(receipts, 'phase-2')
+    expect(receipts.readPending('phase-2')).toBeUndefined()
+    expect(store.read('scope-a').revision).toBe(before)
+  })
+
+  it('refuses to approve a plan that was never planned', async () => {
+    // Without this, a stale browser tab could approve a run id that no longer
+    // has a pending plan and apply nothing while reporting success.
+    const { approveDreamPlan } = await import('../src/memory-dream-receipt.ts')
+    const store = seed()
+    const receipts = new DreamReceiptStore(root)
+    expect(() => approveDreamPlan({ store, receipts, runId: 'missing', now: NOW }))
+      .toThrow(/no pending plan/u)
+  })
+
+  it('lists pending plans so the panel can show them', async () => {
+    const { planDreamSession } = await import('../src/memory-dream-receipt.ts')
+    const receipts = new DreamReceiptStore(root)
+    await planDreamSession({
+      receipts, context: context(), runId: 'p-a', config: {}, now: NOW,
+      callModel: async () => ({ actions: [{ action: 'cool', target: 'alpha' }] }),
+    })
+    await planDreamSession({
+      receipts, context: context(), runId: 'p-b', config: {}, now: NOW + 1000,
+      callModel: async () => ({ actions: [{ action: 'archive', target: 'beta' }] }),
+    })
+    expect(receipts.listPending().map(entry => entry.runId)).toEqual(['p-b', 'p-a'])
+  })
+})

@@ -16,6 +16,14 @@ import { MemoryGovernanceRegistry } from './memory-governance-registry.ts'
 import { MemoryGovernanceStore } from './memory-governance-store.ts'
 import { buildForgettingReport, type ForgettingRecordInput } from './memory-forgetting-report.ts'
 import { initializeGovernance, type InitializeScopeInput } from './memory-governance-init.ts'
+import {
+  DreamReceiptError,
+  DreamReceiptStore,
+  approveDreamPlan,
+  discardDreamPlan,
+  dreamPlanHash,
+  toChange,
+} from './memory-dream-receipt.ts'
 import type { MemoryToolExecution } from './host-contracts.ts'
 import { SessionCatalog } from './session-catalog.ts'
 import { adaptSessionPersistence } from './session-persistence-adapter.ts'
@@ -126,6 +134,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   // so dsh-memory keeps working with nothing else installed.
   const governance = new MemoryGovernanceRegistry()
   const governanceStore = new MemoryGovernanceStore(store.root)
+  const dreamReceipts = new DreamReceiptStore(store.root)
   const receipts = new ConsolidationReceiptStore(join(store.root, 'reviews'))
   const consolidationSettings = new ConsolidationSettingsStore(store.root, workerConfig)
   const candidatePool = new ConsolidationCandidatePool(join(store.root, 'candidates'))
@@ -292,6 +301,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         consolidationSettings,
         governance,
         governanceStore,
+        dreamReceipts,
         endpoint,
         payload,
         signal,
@@ -438,6 +448,19 @@ function collectForgettingRecords(
   return collected
 }
 
+/** Payload for approving or discarding one staged Dream run. */
+function parseDreamRunPayload(payload: unknown): { runId: string } {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new TypeError('dream payload must be an object')
+  }
+  const record = payload as Record<string, unknown>
+  const runId = record.runId
+  if (typeof runId !== 'string' || runId.trim() === '') {
+    throw new TypeError('dream payload.runId must be a non-empty string')
+  }
+  return { runId }
+}
+
 async function handleMemoryRpc(
   store: MarkdownMemoryStore,
   getSessionCatalog: () => SessionCatalog | undefined,
@@ -447,6 +470,7 @@ async function handleMemoryRpc(
   consolidationSettings: ConsolidationSettingsStore,
   governance: MemoryGovernanceRegistry,
   governanceStore: MemoryGovernanceStore,
+  dreamReceipts: DreamReceiptStore,
   endpoint: string,
   payload: unknown,
   signal: AbortSignal,
@@ -558,6 +582,57 @@ async function handleMemoryRpc(
             scopes: summaries.length,
           },
         }
+      }
+      case 'dream/plan': {
+        // Planning is read-only with respect to memory: it stages the plan and
+        // waits. A content-changing plan never applies without dream/approve.
+        parseEmptyPayload(payload)
+        const pending = dreamReceipts.listPending()
+        return {
+          ok: true,
+          value: {
+            pending: pending.map(entry => {
+              const held = dreamReceipts.readPending(entry.runId)
+              return {
+                runId: entry.runId,
+                scopeKey: held?.plan.scopeKey ?? '',
+                state: 'planned',
+                risk: held?.plan.risk ?? 'metadata-only',
+                proposalHash: held === undefined ? '' : dreamPlanHash(held.plan),
+                actions: (held?.plan.actions ?? []).map(toChange),
+                createdAt: entry.createdAt,
+              }
+            }),
+            runs: dreamReceipts.list().slice(0, 20).map(receipt => ({
+              runId: receipt.runId,
+              scopeKey: receipt.scopeKey,
+              state: receipt.state,
+              risk: receipt.risk,
+              proposalHash: receipt.proposalHash,
+              beforeRevision: receipt.beforeRevision,
+              afterRevision: receipt.afterRevision,
+              changes: receipt.changes,
+              createdAt: Date.parse(receipt.createdAt),
+              ...(receipt.error === undefined ? {} : { error: receipt.error }),
+            })),
+          },
+        }
+      }
+      case 'dream/approve': {
+        const input = parseDreamRunPayload(payload)
+        const result = approveDreamPlan({
+          store: governanceStore,
+          receipts: dreamReceipts,
+          runId: input.runId,
+          now: Date.now(),
+        })
+        return { ok: true, value: result.receipt }
+      }
+      case 'dream/discard': {
+        const input = parseDreamRunPayload(payload)
+        // Declining a plan writes nothing, so there is nothing to undo.
+        discardDreamPlan(dreamReceipts, input.runId)
+        return { ok: true, value: { discarded: input.runId } }
       }
       case 'governance/forgetting': {
         parseEmptyPayload(payload)

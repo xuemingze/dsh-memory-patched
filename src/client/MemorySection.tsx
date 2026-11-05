@@ -34,6 +34,9 @@ export interface MemoryApi {
   commitWorkspace(input: WorkspaceCommitPayload, signal?: AbortSignal): Promise<WorkspaceCommitResponse>
   listSessions(signal?: AbortSignal): Promise<SessionListResponse>
   forgettingReport(signal?: AbortSignal): Promise<ForgettingReportViewProps['report']>
+  dreamReport(signal?: AbortSignal): Promise<Pick<DreamViewProps, 'pending' | 'runs'>>
+  dreamApprove(runId: string, signal?: AbortSignal): Promise<unknown>
+  dreamDiscard(runId: string, signal?: AbortSignal): Promise<unknown>
   consolidateSession(sessionId: string, signal?: AbortSignal): Promise<SessionConsolidateResponse>
   readModels(signal?: AbortSignal): Promise<ConsolidationModelCatalogResponse>
   selectModel(input: {
@@ -51,7 +54,7 @@ export interface MemorySectionInjected {
   readonly t: MemoryTranslate
 }
 
-type Tab = 'global' | 'workspaces' | 'sessions' | 'forgetting' | 'settings'
+type Tab = 'global' | 'workspaces' | 'sessions' | 'forgetting' | 'dream' | 'settings'
 type MemoryButtonVariant = 'default' | 'primary' | 'danger' | 'tab' | 'workspace'
 type ErrorState =
   | { readonly kind: 'global-conflict' }
@@ -377,6 +380,128 @@ export function SuppressedSessions(props: SuppressedSessionsProps): React.JSX.El
   )
 }
 
+/** One staged or completed Dream action as shown in the panel. */
+export interface DreamActionViewProps {
+  readonly action: string
+  readonly target: string
+  readonly sources?: readonly string[]
+  readonly rationale?: string
+}
+
+/** Browser-side view of Dream: plans waiting for a decision, plus recent runs. */
+export interface DreamViewProps {
+  readonly pending: readonly {
+    readonly runId: string
+    readonly scopeKey: string
+    readonly risk: string
+    readonly proposalHash: string
+    readonly actions: readonly DreamActionViewProps[]
+    readonly createdAt: number
+  }[]
+  readonly runs: readonly {
+    readonly runId: string
+    readonly scopeKey: string
+    readonly state: string
+    readonly risk: string
+    readonly changes: readonly DreamActionViewProps[]
+    readonly createdAt: number
+    readonly error?: string
+  }[]
+  readonly onApprove?: (runId: string) => void
+  readonly onDiscard?: (runId: string) => void
+  readonly busy?: boolean
+  readonly t: MemoryTranslate
+}
+
+/**
+ * Dream's staging area.
+ *
+ * A pending plan is shown as a list of handles with two buttons, and nothing has
+ * touched memory yet. The risk label is the important part: a plan that rewrites
+ * bodies reads differently from one that only moves metadata, because only the
+ * first can lose information.
+ *
+ * There is no action here that applies a plan silently, and none that deletes.
+ */
+export function DreamView(props: DreamViewProps): React.JSX.Element {
+  const { pending, runs, onApprove, onDiscard, busy = false, t } = props
+  return (
+    <section data-memory-dream="" style={memorySectionStyles.sessionCard}>
+      <header style={memorySectionStyles.workspaceHeading}>
+        <div>
+          <h3 style={memorySectionStyles.workspaceTitle}>{t('dreamTitle')}</h3>
+          <p style={memorySectionStyles.subtitle}>{t('dreamHelp')}</p>
+        </div>
+      </header>
+
+      <h4 style={memorySectionStyles.workspaceTitle}>{t('dreamPendingTitle')}</h4>
+      {pending.length === 0
+        ? <p style={memorySectionStyles.subtitle}>{t('dreamNoPending')}</p>
+        : (
+          <ul style={memorySectionStyles.list}>
+            {pending.map(entry => (
+              <li key={entry.runId} data-dream-pending={entry.runId} style={memorySectionStyles.sessionCard}>
+                <div style={memorySectionStyles.sessionSummary}>
+                  <code>{entry.runId}</code>
+                  <span style={memorySectionStyles.badge}>
+                    {entry.risk === 'content-change' ? t('dreamRiskContent') : t('dreamRiskMetadata')}
+                  </span>
+                  <span style={memorySectionStyles.badge}>
+                    {t('dreamActionsCount')} {entry.actions.length}
+                  </span>
+                </div>
+                <ul style={memorySectionStyles.list}>
+                  {entry.actions.map((action, index) => (
+                    <li key={`${entry.runId}-${index}`}>
+                      <code>{action.action}</code> → <strong>{action.target}</strong>
+                      {action.sources === undefined ? null : ` (${action.sources.join(', ')})`}
+                      {action.rationale === undefined ? null : <em> — {action.rationale}</em>}
+                    </li>
+                  ))}
+                </ul>
+                <div>
+                  <MemoryButton
+                    type="button"
+                    variant="primary"
+                    disabled={busy}
+                    onClick={() => { onApprove?.(entry.runId) }}
+                  >
+                    {t('dreamApprove')}
+                  </MemoryButton>
+                  <MemoryButton
+                    type="button"
+                    disabled={busy}
+                    onClick={() => { onDiscard?.(entry.runId) }}
+                  >
+                    {t('dreamDiscard')}
+                  </MemoryButton>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+
+      <h4 style={memorySectionStyles.workspaceTitle}>{t('dreamHistoryTitle')}</h4>
+      {runs.length === 0
+        ? <p style={memorySectionStyles.subtitle}>{t('dreamNoRuns')}</p>
+        : (
+          <ul style={memorySectionStyles.list}>
+            {runs.map(entry => (
+              <li key={entry.runId} data-dream-run={entry.runId}>
+                <code>{entry.runId}</code> — <span>{entry.state}</span>
+                {' · '}
+                {entry.risk === 'content-change' ? t('dreamRiskContent') : t('dreamRiskMetadata')}
+                {' · '}
+                {t('dreamActionsCount')} {entry.changes.length}
+                {entry.error === undefined ? null : <div style={memorySectionStyles.validation}>{entry.error}</div>}
+              </li>
+            ))}
+          </ul>
+        )}
+    </section>
+  )
+}
+
 /** Browser-side view of the shadow forgetting report. */
 export interface ForgettingReportViewProps {
   readonly report: {
@@ -459,6 +584,8 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
   const [sessions, setSessions] = useState<SessionListResponse>()
   const [forgetting, setForgetting] = useState<ForgettingReportViewProps['report']>()
   const [forgettingBusy, setForgettingBusy] = useState(false)
+  const [dream, setDream] = useState<Pick<DreamViewProps, 'pending' | 'runs'>>()
+  const [dreamBusy, setDreamBusy] = useState(false)
   const [selectedSessionWorkspaceKey, setSelectedSessionWorkspaceKey] = useState<string>()
   const [consolidatingSessionId, setConsolidatingSessionId] = useState<string>()
   const [consolidationResult, setConsolidationResult] = useState<{ sessionId: string; result: SessionConsolidateResponse }>()
@@ -602,6 +729,32 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
     }
   }
 
+  const refreshDream = async (signal?: AbortSignal): Promise<void> => {
+    setDreamBusy(true)
+    setError(undefined)
+    try {
+      setDream(await props.api.dreamReport(signal))
+    } catch (cause: unknown) {
+      if (!signal?.aborted) setError({ kind: 'message', value: cause instanceof Error ? cause.message : String(cause) })
+    } finally {
+      if (!signal?.aborted) setDreamBusy(false)
+    }
+  }
+
+  const decideDream = async (runId: string, approve: boolean): Promise<void> => {
+    setDreamBusy(true)
+    setError(undefined)
+    try {
+      if (approve) await props.api.dreamApprove(runId)
+      else await props.api.dreamDiscard(runId)
+      setDream(await props.api.dreamReport())
+    } catch (cause: unknown) {
+      setError({ kind: 'message', value: cause instanceof Error ? cause.message : String(cause) })
+    } finally {
+      setDreamBusy(false)
+    }
+  }
+
   const consolidateSession = async (sessionId: string): Promise<void> => {
     setConsolidatingSessionId(sessionId)
     setConsolidationResult(undefined)
@@ -669,6 +822,7 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
     if (next === 'workspaces' && workspaces.length === 0) void refreshWorkspaces(signal)
     if (next === 'sessions' && sessions === undefined) void refreshSessions(signal)
     if (next === 'forgetting' && forgetting === undefined) void refreshForgetting(signal)
+    if (next === 'dream' && dream === undefined) void refreshDream(signal)
     if (next === 'settings' && modelCatalog === undefined) void refreshModels(signal)
   }
 
@@ -679,6 +833,7 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
     // Forgetting is its own concern, so it refreshes on its own entry rather
     // than piggybacking on the Session list.
     if (tab === 'forgetting') await refreshForgetting()
+    if (tab === 'dream') await refreshDream()
     if (tab === 'settings') await refreshModels()
   }
 
@@ -766,7 +921,7 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
       </div>
 
       <nav style={memorySectionStyles.tabs} aria-label={t('sections')}>
-        {(['global', 'workspaces', 'sessions', 'forgetting', 'settings'] as const).map(id => (
+        {(['global', 'workspaces', 'sessions', 'forgetting', 'dream', 'settings'] as const).map(id => (
           <MemoryButton
             key={id}
             type="button"
@@ -944,6 +1099,22 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
             )}
           </div>
           </div>
+        </div>
+      ) : tab === 'dream' ? (
+        <div style={memorySectionStyles.panel}>
+          {dreamBusy && dream === undefined ? <p>{t('loading')}</p> : null}
+          {dream === undefined
+            ? null
+            : (
+              <DreamView
+                pending={dream.pending}
+                runs={dream.runs}
+                busy={dreamBusy}
+                onApprove={runId => { void decideDream(runId, true) }}
+                onDiscard={runId => { void decideDream(runId, false) }}
+                t={t}
+              />
+            )}
         </div>
       ) : tab === 'forgetting' ? (
         <div style={memorySectionStyles.panel}>

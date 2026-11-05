@@ -7,6 +7,7 @@ import {
   parseMemoryStatus,
   parseSessionListResponse,
   parseForgettingReportResponse,
+  parseDreamPanelResponse,
   parseSessionConsolidateResponse,
   parseConsolidationModelCatalogResponse,
   parseConsolidationModelSelectResponse,
@@ -89,6 +90,11 @@ function createMemoryApi(connection: BrowserConnection): MemoryApi {
     commitWorkspace: async (input, signal) => parseWorkspaceCommitResponse(await call('workspace/commit', input, signal)),
     listSessions: async signal => parseSessionListResponse(await call('sessions/list', {}, signal)),
     forgettingReport: async signal => parseForgettingReportResponse(await call('governance/forgetting', {}, signal)),
+    // The panel shows staged plans and recent runs together; a plan is never
+    // applied by reading it.
+    dreamReport: async signal => parseDreamPanelResponse(await call('dream/plan', {}, signal)),
+    dreamApprove: async (runId, signal) => call('dream/approve', { runId }, signal),
+    dreamDiscard: async (runId, signal) => call('dream/discard', { runId }, signal),
     consolidateSession: async (sessionId, signal) => parseSessionConsolidateResponse(
       await call('sessions/consolidate', { sessionId }, signal),
     ),
