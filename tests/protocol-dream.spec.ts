@@ -111,3 +111,30 @@ describe('Dream protocol safety', () => {
     expect(() => parseDreamRunResponse(null)).toThrow(DreamProtocolError)
   })
 })
+
+describe('Dream panel payload', () => {
+  const plan = {
+    runId: 'd1', scopeKey: 's', state: 'planned', risk: 'metadata-only',
+    proposalHash: 'h', actions: [], createdAt: 1,
+  }
+
+  it('accepts the mode the status endpoint reports', async () => {
+    // dream/status returns the active mode alongside the lists; without it the
+    // panel cannot tell shadow from manual.
+    const { parseDreamPanelResponse } = await import('../src/protocol.ts')
+    const parsed = parseDreamPanelResponse({ mode: 'shadow', pending: [plan], runs: [] })
+    expect(parsed.mode).toBe('shadow')
+    expect(parsed.pending).toHaveLength(1)
+  })
+
+  it('rejects an unknown mode rather than defaulting silently', async () => {
+    const { parseDreamPanelResponse } = await import('../src/protocol.ts')
+    expect(() => parseDreamPanelResponse({ mode: 'auto', pending: [], runs: [] }))
+      .toThrow(/mode/u)
+  })
+
+  it('requires the mode to be present', async () => {
+    const { parseDreamPanelResponse } = await import('../src/protocol.ts')
+    expect(() => parseDreamPanelResponse({ pending: [], runs: [] })).toThrow(/mode/u)
+  })
+})

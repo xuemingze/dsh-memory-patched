@@ -189,6 +189,7 @@ const DREAM_RUN_STATES = [
 ] as const
 
 const DREAM_RISKS = ['metadata-only', 'content-change'] as const
+const DREAM_RUN_MODES = ['off', 'shadow', 'manual'] as const
 
 function dreamRecord(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -278,14 +279,21 @@ export function parseDreamPlanResponse(value: unknown): DreamPlanResponse {
  * a malformed entry is rejected rather than rendered half-populated.
  */
 export function parseDreamPanelResponse(value: unknown): {
+  mode: string
   pending: DreamPlanResponse[]
   runs: DreamRunResponse[]
 } {
   const record = dreamRecord(value, 'dream panel')
-  dreamExactKeys(record, ['pending', 'runs'], 'dream panel')
+  dreamExactKeys(record, ['mode', 'pending', 'runs'], 'dream panel')
+  // The mode is validated rather than defaulted: silently reading an unknown
+  // mode as shadow would hide that the panel is showing stale expectations.
+  if (!DREAM_RUN_MODES.includes(record.mode as (typeof DREAM_RUN_MODES)[number])) {
+    throw new DreamProtocolError(`dream panel.mode must be one of: ${DREAM_RUN_MODES.join(', ')}`)
+  }
   if (!Array.isArray(record.pending)) throw new DreamProtocolError('dream panel.pending must be an array')
   if (!Array.isArray(record.runs)) throw new DreamProtocolError('dream panel.runs must be an array')
   return {
+    mode: record.mode as string,
     pending: record.pending.map((entry, index) => parseDreamPlanResponse(entry)),
     runs: record.runs.map((entry, index) => parseDreamRunResponse(entry)),
   }

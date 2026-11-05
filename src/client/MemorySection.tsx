@@ -35,7 +35,7 @@ export interface MemoryApi {
   commitWorkspace(input: WorkspaceCommitPayload, signal?: AbortSignal): Promise<WorkspaceCommitResponse>
   listSessions(signal?: AbortSignal): Promise<SessionListResponse>
   forgettingReport(signal?: AbortSignal): Promise<ForgettingReportViewProps['report']>
-  dreamReport(signal?: AbortSignal): Promise<Pick<DreamViewProps, 'pending' | 'runs'>>
+  dreamReport(signal?: AbortSignal): Promise<Pick<DreamViewProps, 'mode' | 'pending' | 'runs'>>
   dreamApprove(runId: string, approved: readonly string[], signal?: AbortSignal): Promise<unknown>
   dreamReject(runId: string, reason: string, signal?: AbortSignal): Promise<unknown>
   consolidateSession(sessionId: string, signal?: AbortSignal): Promise<SessionConsolidateResponse>
@@ -391,6 +391,8 @@ export interface DreamActionViewProps {
 
 /** Browser-side view of Dream: plans waiting for a decision, plus recent runs. */
 export interface DreamViewProps {
+  /** off | shadow | manual, straight from settings. */
+  readonly mode?: string | undefined
   readonly pending: readonly {
     readonly runId: string
     readonly scopeKey: string
@@ -453,7 +455,7 @@ const REASON_KEY: Record<string, MemoryLocaleKey> = {
  */
 
 export function DreamView(props: DreamViewProps): React.JSX.Element {
-  const { pending, runs, onApprove, onDiscard, busy = false, t } = props
+  const { mode, pending, runs, onApprove, onDiscard, busy = false, t } = props
   // Selection lives per run: two staged plans can be open at once.
   const [ticked, setTicked] = useState<Record<string, string[]>>({})
   const [reason, setReason] = useState<string>(REJECT_REASONS[0]!)
@@ -479,6 +481,13 @@ export function DreamView(props: DreamViewProps): React.JSX.Element {
         <div>
           <h3 style={memorySectionStyles.workspaceTitle}>{t('dreamTitle')}</h3>
           <p style={memorySectionStyles.subtitle}>{t('dreamHelp')}</p>
+          {mode === undefined ? null : (
+            <p style={memorySectionStyles.subtitle}>
+              {t('dreamMode')}: <strong>{mode}</strong>
+              {mode === 'manual' ? ` — ${t('dreamModeManualHelp')}` : null}
+              {mode === 'off' ? ` — ${t('dreamModeOffHelp')}` : null}
+            </p>
+          )}
         </div>
       </header>
 
@@ -661,7 +670,7 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
   const [sessions, setSessions] = useState<SessionListResponse>()
   const [forgetting, setForgetting] = useState<ForgettingReportViewProps['report']>()
   const [forgettingBusy, setForgettingBusy] = useState(false)
-  const [dream, setDream] = useState<Pick<DreamViewProps, 'pending' | 'runs'>>()
+  const [dream, setDream] = useState<Pick<DreamViewProps, 'mode' | 'pending' | 'runs'>>()
   const [dreamBusy, setDreamBusy] = useState(false)
   const [selectedSessionWorkspaceKey, setSelectedSessionWorkspaceKey] = useState<string>()
   const [consolidatingSessionId, setConsolidatingSessionId] = useState<string>()
@@ -1190,6 +1199,7 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
             ? null
             : (
               <DreamView
+                mode={dream.mode}
                 pending={dream.pending}
                 runs={dream.runs}
                 busy={dreamBusy}
