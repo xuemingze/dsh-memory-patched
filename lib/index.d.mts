@@ -342,9 +342,25 @@ interface ConsolidationEvidenceTurn {
 }
 //#endregion
 //#region src/consolidation-candidates.d.ts
-/** Why the worker parked a change instead of committing it. */
-declare const CANDIDATE_REASONS: readonly ["uncertain", "thin", "unverified", "transient"];
+/**
+ * Why the worker parked a change instead of committing it.
+ *
+ * `conflict` and `needs-verification` are governance reasons: the change may be
+ * right, but it disagrees with something already stored, or nothing was able to
+ * check it yet. Parking keeps both sides visible until a deterministic verdict
+ * exists, instead of letting the newest write win.
+ */
+declare const CANDIDATE_REASONS: readonly ["uncertain", "thin", "unverified", "transient", "conflict", "needs-verification"];
 type ConsolidationCandidateReason = (typeof CANDIDATE_REASONS)[number];
+/** Extra facts recorded when a candidate was parked because of a conflict. */
+interface ConsolidationCandidateConflict {
+  /** Stable subject digest shared by the two disagreeing records. */
+  readonly claimKey: string;
+  /** Records that already make the opposite claim. */
+  readonly opposingRecords: readonly string[];
+  /** Environment bucket the disagreement belongs to. */
+  readonly environmentFingerprint: string;
+}
 /** One parked change with the audit facts needed to adjudicate it later. */
 interface ConsolidationCandidateEntry {
   readonly id: string;
@@ -366,6 +382,8 @@ interface ConsolidationCandidateEntry {
     readonly sourceSessionId: string;
   };
   readonly proposedAt: string;
+  /** Present only when the candidate was parked because of a conflict. */
+  readonly conflict?: ConsolidationCandidateConflict;
 }
 /**
  * JSONL pool under `<memory root>/candidates/<workspaceKey>.jsonl`. One file

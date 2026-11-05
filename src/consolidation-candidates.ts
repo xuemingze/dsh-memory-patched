@@ -6,9 +6,33 @@ import { randomUUID } from 'node:crypto'
 import type { ConsolidationEvidenceRange } from './consolidation-proposal.ts'
 import type { WorkspaceMemory } from './memory-store.ts'
 
-/** Why the worker parked a change instead of committing it. */
-export const CANDIDATE_REASONS = ['uncertain', 'thin', 'unverified', 'transient'] as const
+/**
+ * Why the worker parked a change instead of committing it.
+ *
+ * `conflict` and `needs-verification` are governance reasons: the change may be
+ * right, but it disagrees with something already stored, or nothing was able to
+ * check it yet. Parking keeps both sides visible until a deterministic verdict
+ * exists, instead of letting the newest write win.
+ */
+export const CANDIDATE_REASONS = [
+  'uncertain',
+  'thin',
+  'unverified',
+  'transient',
+  'conflict',
+  'needs-verification',
+] as const
 export type ConsolidationCandidateReason = (typeof CANDIDATE_REASONS)[number]
+
+/** Extra facts recorded when a candidate was parked because of a conflict. */
+export interface ConsolidationCandidateConflict {
+  /** Stable subject digest shared by the two disagreeing records. */
+  readonly claimKey: string
+  /** Records that already make the opposite claim. */
+  readonly opposingRecords: readonly string[]
+  /** Environment bucket the disagreement belongs to. */
+  readonly environmentFingerprint: string
+}
 
 /** Hard ceiling per Workspace so an unadjudicated pool cannot grow forever. */
 export const MAX_CANDIDATE_POOL = 200
@@ -28,6 +52,8 @@ export interface ConsolidationCandidateEntry {
   readonly lastEvidenceTime: number
   readonly origin: { readonly reviewId: string; readonly sourceSessionId: string }
   readonly proposedAt: string
+  /** Present only when the candidate was parked because of a conflict. */
+  readonly conflict?: ConsolidationCandidateConflict
 }
 
 export class ConsolidationCandidateError extends Error {
@@ -39,12 +65,35 @@ export class ConsolidationCandidateError extends Error {
 
 const ID_PATTERN = /^cand-[a-f0-9]{8}-\d+$/u
 
+/** Validate the governance facts attached to a parked conflict. */
+function parseCandidateConflict(value: unknown, label: string): ConsolidationCandidateConflict {
+  const record = requireRecord(value, label)
+  requireExactKeys(record, ['claimKey', 'opposingRecords', 'environmentFingerprint'], label)
+  if (typeof record.claimKey !== 'string' || !/^[a-f0-9]{16}$/u.test(record.claimKey)) {
+    throw new ConsolidationCandidateError(`${label}.claimKey must be 16 lowercase hex characters`)
+  }
+  if (!Array.isArray(record.opposingRecords)
+    || record.opposingRecords.some(entry => typeof entry !== 'string' || entry === '')) {
+    throw new ConsolidationCandidateError(`${label}.opposingRecords must be a list of record names`)
+  }
+  if (typeof record.environmentFingerprint !== 'string') {
+    throw new ConsolidationCandidateError(`${label}.environmentFingerprint must be a string`)
+  }
+  return {
+    claimKey: record.claimKey,
+    opposingRecords: record.opposingRecords as string[],
+    environmentFingerprint: record.environmentFingerprint,
+  }
+}
+
 /** Validate one pool entry coming from disk or from replayed worker evidence. */
 export function parseCandidateEntry(value: unknown): ConsolidationCandidateEntry {
   const record = requireRecord(value, 'candidate')
-  requireExactKeys(record, [
+  const coreKeys = [
     'id', 'workspaceKey', 'change', 'reason', 'evidenceExcerpt', 'lastEvidenceTime', 'origin', 'proposedAt',
-  ], 'candidate')
+  ]
+  // `conflict` is optional so entries written before governance existed still load.
+  requireExactKeys(record, record.conflict === undefined ? coreKeys : [...coreKeys, 'conflict'], 'candidate')
   if (typeof record.id !== 'string' || !ID_PATTERN.test(record.id)) {
     throw new ConsolidationCandidateError('candidate.id must match cand-<hex8>-<n>')
   }
@@ -69,6 +118,9 @@ export function parseCandidateEntry(value: unknown): ConsolidationCandidateEntry
     || typeof origin.sourceSessionId !== 'string' || origin.sourceSessionId.trim() === '') {
     throw new ConsolidationCandidateError('candidate.origin must carry non-empty review and Session ids')
   }
+  const conflict = record.conflict === undefined
+    ? undefined
+    : parseCandidateConflict(record.conflict, 'candidate.conflict')
   const change = requireRecord(record.change, 'candidate.change')
   const evidence = parseEvidenceRanges(change.evidence, 'candidate.change.evidence')
   if (change.action === 'put') {
@@ -82,6 +134,7 @@ export function parseCandidateEntry(value: unknown): ConsolidationCandidateEntry
       lastEvidenceTime: record.lastEvidenceTime,
       origin: { reviewId: origin.reviewId, sourceSessionId: origin.sourceSessionId },
       proposedAt: record.proposedAt,
+      ...(conflict === undefined ? {} : { conflict }),
     }
   }
   if (change.action === 'delete') {
@@ -98,6 +151,7 @@ export function parseCandidateEntry(value: unknown): ConsolidationCandidateEntry
       lastEvidenceTime: record.lastEvidenceTime,
       origin: { reviewId: origin.reviewId, sourceSessionId: origin.sourceSessionId },
       proposedAt: record.proposedAt,
+      ...(conflict === undefined ? {} : { conflict }),
     }
   }
   throw new ConsolidationCandidateError('candidate.change.action must be put or delete')
