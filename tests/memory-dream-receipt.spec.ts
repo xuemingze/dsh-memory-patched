@@ -575,3 +575,57 @@ describe('Approval edge cases from the spec', () => {
     expect(declined[0]?.reason).toBe('not-important')
   })
 })
+describe('Promotion reaches GLOBAL.md', () => {
+  const GLOBAL = ['# Global Memory', '', '## User Profile', '', '- a fact', '', '## Safe Section', '', '- existing', ''].join('\n')
+
+  /** A store seeded with one GLOBAL document plus the usual records. */
+  function withGlobal(): { store: MemoryGovernanceStore; globalPath: string } {
+    const { writeFileSync: write } = require('node:fs') as typeof import('node:fs')
+    const globalPath = join(root, 'GLOBAL.md')
+    write(globalPath, GLOBAL, 'utf8')
+    return { store: seed(), globalPath }
+  }
+
+  it('appends the promoted line to the named section', async () => {
+    const { publishPromotions } = await import('../src/memory-dream-receipt.ts')
+    const { store, globalPath } = withGlobal()
+    const plan = parseDreamProposal({
+      actions: [{
+        action: 'promote-global', source: 'alpha', section: 'Safe Section', text: 'a durable rule',
+      }],
+    }, { ...context(), globalSections: ['User Profile', 'Safe Section'] })
+
+    const applied = applyDreamPlan(store, plan, NOW)
+    expect(applied.promotions).toHaveLength(1)
+
+    const { readFileSync: read } = require('node:fs') as typeof import('node:fs')
+    const { writeFileSync: write } = require('node:fs') as typeof import('node:fs')
+    // A real writer, so the assertion below reads what was actually published.
+    await publishPromotions(
+      { readGlobalSync: () => ({ content: read(globalPath, 'utf8'), revision: 'r' as never }),
+        commitGlobal: async (input) => {
+          write(globalPath, input.content, 'utf8')
+          return { operation: 'update', revision: 'r2' as never }
+        } },
+      applied.promotions,
+      { runId: 'run-1', globalSections: ['User Profile', 'Safe Section'] },
+    )
+    const after = read(globalPath, 'utf8')
+    expect(after).toContain('a durable rule')
+    // The line must land inside the section, not at the end of the file.
+    const at = after.indexOf('a durable rule')
+    expect(at).toBeGreaterThan(after.indexOf('## Safe Section'))
+  })
+
+  it('refuses a section that is not in GLOBAL', async () => {
+    const { publishPromotions } = await import('../src/memory-dream-receipt.ts')
+    const { globalPath } = withGlobal()
+    const { readFileSync: read } = require('node:fs') as typeof import('node:fs')
+    await expect(publishPromotions(
+      { readGlobalSync: () => ({ content: read(globalPath, 'utf8'), revision: 'r' as never }),
+        commitGlobal: async () => ({ operation: 'update', revision: 'r2' as never }) },
+      [{ section: 'Nonexistent', text: 'x', source: 'alpha' }],
+      { runId: 'run-2', globalSections: ['Safe Section'] },
+    )).rejects.toThrow(/does not exist/u)
+  })
+})

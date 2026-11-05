@@ -22,6 +22,7 @@ import {
   approveDreamPlan,
   discardDreamPlan,
   dreamPlanHash,
+  publishPromotions,
   toChange,
 } from './memory-dream-receipt.ts'
 import {
@@ -30,6 +31,7 @@ import {
   selectApprovedActions,
   toApprovable,
 } from './memory-dream-approval.ts'
+import { parseGlobalSections } from './memory-global-guard.ts'
 import type { MemoryToolExecution } from './host-contracts.ts'
 import { SessionCatalog } from './session-catalog.ts'
 import { adaptSessionPersistence } from './session-persistence-adapter.ts'
@@ -731,7 +733,35 @@ async function handleMemoryRpc(
           approved: input.approved,
           ...(partial ? { partial: true } : {}),
         })
-        return { ok: true, value: toRunView(result.receipt) }
+
+        // Promotions live in GLOBAL.md, which the governance sidecar does not
+        // own. They are published only after the sidecar commit succeeded, and a
+        // failure here is reported rather than swallowed: the user approved a
+        // change and must learn if it never reached the document.
+        let promotionError: string | undefined
+        if (result.promotions.length > 0) {
+          try {
+            const global = store.readGlobalSync()
+            await publishPromotions(
+              {
+                readGlobalSync: () => store.readGlobalSync(),
+                commitGlobal: next => store.commitGlobal(next as never),
+              },
+              result.promotions,
+              { runId: input.runId, globalSections: parseGlobalSections(global.content) },
+            )
+          } catch (cause: unknown) {
+            promotionError = cause instanceof Error ? cause.message : String(cause)
+          }
+        }
+
+        return {
+          ok: true,
+          value: {
+            ...toRunView(result.receipt),
+            ...(promotionError === undefined ? {} : { promotionError }),
+          },
+        }
       }
       case 'dream/proposal/reject': {
         // The reason code is stored so the same snapshot does not re-propose

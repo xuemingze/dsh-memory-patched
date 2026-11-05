@@ -15,6 +15,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, w
 import { join } from 'node:path'
 import type { DreamAction, DreamPlan, DreamProposalContext, DreamRisk } from './memory-dream-proposal.ts'
 import { planActionFingerprint, toApprovable } from './memory-dream-approval.ts'
+import { GlobalGuardError, applyGlobalPromotion, parseGlobalSections } from './memory-global-guard.ts'
 import {
   DEFAULT_DREAM_WORKER_CONFIG,
   DreamWorkerError,
@@ -635,7 +636,11 @@ export interface ApproveDreamOptions {
  * The pending copy is consumed only after the write succeeds, so a crash mid-way
  * leaves the plan available to retry instead of losing it.
  */
-export function approveDreamPlan(options: ApproveDreamOptions): { receipt: DreamReceipt } {
+export function approveDreamPlan(options: ApproveDreamOptions): {
+  receipt: DreamReceipt
+  /** Promotions still need writing to GLOBAL.md; the caller owns that file. */
+  promotions: readonly { readonly section: string; readonly text: string; readonly source: string }[]
+} {
   const pending = options.receipts.readPending(options.runId)
   if (pending === undefined) {
     throw new DreamReceiptError(`no pending plan for run "${options.runId}"`)
@@ -672,7 +677,7 @@ export function approveDreamPlan(options: ApproveDreamOptions): { receipt: Dream
       completedAt: createdAt,
     })
     options.receipts.clearPending(options.runId)
-    return { receipt }
+    return { receipt, promotions: applied.promotions }
   } catch (cause: unknown) {
     const stale = cause instanceof Error && /no longer exists/u.test(cause.message)
     const receipt = options.receipts.write({
@@ -691,11 +696,59 @@ export function approveDreamPlan(options: ApproveDreamOptions): { receipt: Dream
       completedAt: createdAt,
       error: cause instanceof Error ? cause.message : String(cause),
     })
-    return { receipt }
+    return { receipt, promotions: [] }
   }
 }
 
 /** Drop a pending plan the user declined. Nothing was written, so nothing to undo. */
 export function discardDreamPlan(receipts: DreamReceiptStore, runId: string): void {
   receipts.clearPending(runId)
+}
+/** The slice of MarkdownMemoryStore that publishing needs. */
+export interface GlobalDocumentStore {
+  readGlobalSync(): { content: string; revision: string }
+  commitGlobal(input: { expectedRevision: string; content: string }): Promise<unknown>
+}
+
+/**
+ * Write approved promotions into GLOBAL.md.
+ *
+ * This is the only place Dream touches GLOBAL, and it goes through the guard so
+ * the append-only rule is enforced once rather than restated per caller. Every
+ * promotion is applied to the in-memory copy first and published as a single
+ * commit: two promotions landing in two commits would leave GLOBAL half-updated
+ * if the second one is rejected.
+ *
+ * The whole batch is refused if any section is missing, because a partial
+ * publish would silently drop the promotions that came after the bad one.
+ */
+export async function publishPromotions(
+  store: GlobalDocumentStore,
+  promotions: readonly { readonly section: string; readonly text: string; readonly source: string }[],
+  context: { readonly runId: string; readonly globalSections: readonly string[] },
+): Promise<{ readonly content: string; readonly published: number }> {
+  if (promotions.length === 0) {
+    const current = store.readGlobalSync()
+    return { content: current.content, published: 0 }
+  }
+
+  const before = store.readGlobalSync()
+  let draft = before.content
+  for (const promotion of promotions) {
+    const sections = parseGlobalSections(draft)
+    if (!sections.includes(promotion.section)) {
+      throw new GlobalGuardError(
+        `global section "${promotion.section}" does not exist in GLOBAL.md`,
+      )
+    }
+    draft = applyGlobalPromotion(draft, {
+      section: promotion.section,
+      text: promotion.text,
+      source: promotion.source,
+      runId: context.runId,
+    })
+  }
+
+  await store.commitGlobal({ expectedRevision: before.revision, content: draft })
+  return { content: draft, published: promotions.length }
 }
