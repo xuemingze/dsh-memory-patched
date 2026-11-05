@@ -1,5 +1,21 @@
 import { Context, Service } from "@deepseek-ai/cordis";
 import { SessionId } from "@deepseek-ai/dsh-session";
+//#region src/memory-governance-types.d.ts
+/** Where a claim sits in its lifecycle. Nothing here deletes Markdown. */
+type Lifecycle = 'active' | 'contested' | 'cooled' | 'superseded' | 'archived';
+//#endregion
+//#region src/memory-visibility.d.ts
+/** Decides which records the model may see right now. */
+interface MemoryVisibilityPolicy {
+  /**
+   * True when the governance sidecar could not be read. A degraded policy must
+   * pass everything through: losing metadata may cost ranking quality, but it
+   * must never hide a memory.
+   */
+  readonly degraded: boolean;
+  readonly lifecycleOf: (recordName: string) => Lifecycle;
+}
+//#endregion
 //#region src/protocol.d.ts
 /** Browser/Host wire values for the dedicated loopback Memory RPC channel. */
 /** Opaque content revision used for compare-and-swap writes. */
@@ -319,7 +335,7 @@ declare class MarkdownMemoryStore extends Service {
   /** Render the complete runtime-context snapshot for one optional cwd. */
   renderContext(cwd?: string): string;
   /** Render model-visible memory and retain its exact generations for Host-owned CAS. */
-  renderContextSnapshot(cwd?: string): MemoryContextSnapshot;
+  renderContextSnapshot(cwd?: string, visibility?: MemoryVisibilityPolicy): MemoryContextSnapshot;
   /** Collect observational store totals for the Settings status banner. */
   status(): MemoryStatus;
   private withLock;

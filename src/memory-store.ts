@@ -15,6 +15,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Context, Service } from '@deepseek-ai/cordis'
+import { filterIndexByVisibility, type MemoryVisibilityPolicy } from './memory-visibility.ts'
 import { parse, stringify } from 'yaml'
 import type {
   MemoryRevision,
@@ -329,7 +330,7 @@ export class MarkdownMemoryStore extends Service {
   }
 
   /** Render model-visible memory and retain its exact generations for Host-owned CAS. */
-  renderContextSnapshot(cwd?: string): MemoryContextSnapshot {
+  renderContextSnapshot(cwd?: string, visibility?: MemoryVisibilityPolicy): MemoryContextSnapshot {
     const global = this.readGlobalSync()
     const sections = [
       '## Memory Context',
@@ -349,7 +350,10 @@ export class MarkdownMemoryStore extends Service {
         '',
         `Detailed memory directory: ${scope.directory}`,
       )
-      if (workspace.index.trim() !== '') sections.push('', workspace.index.trimEnd())
+      // Filter only the rendered copy. The on-disk index stays complete so the
+      // Settings page can still show and restore a hidden record.
+      const visibleIndex = filterIndexByVisibility(workspace.index, visibility)
+      if (visibleIndex.trim() !== '') sections.push('', visibleIndex.trimEnd())
     }
     return {
       text: `${sections.join('\n')}\n`,
