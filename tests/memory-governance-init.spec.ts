@@ -131,6 +131,21 @@ describe('initializeGovernance', () => {
     expect(target.read('scope-a').claims[0]?.importanceScore).toBeGreaterThanOrEqual(80)
   })
 
+  it('stores a short summary rather than the record body', () => {
+    const target = store()
+    const body = 'x'.repeat(5_000)
+    initializeGovernance(target, [{
+      scopeKey: 'scope-a',
+      records: [record('alpha', { description: 'short summary', content: body })],
+    }], NOW)
+    const claim = target.read('scope-a').claims[0]!
+    // Markdown stays the source of truth for what a memory says; copying the
+    // body here would double storage and let the two copies drift apart.
+    expect(claim.text).toBe('short summary')
+    expect(claim.text.length).toBeLessThan(400)
+    expect(claim.text).not.toContain('xxxx')
+  })
+
   it('keeps scopes independent', () => {
     const target = store()
     initializeGovernance(target, [

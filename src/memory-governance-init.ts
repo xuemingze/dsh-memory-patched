@@ -123,7 +123,10 @@ export function initializeGovernance(
         importanceScore: score,
         // The class is derived, never trusted from input.
         importanceClass: importanceOf(score),
-        text: `${record.description}\n${record.content}`.slice(0, 2_000),
+        // The sidecar holds a short handle for reasoning, never the record body:
+        // Markdown stays the single source of truth for what a memory says, and
+        // copying全文 here would double the storage and let the two drift.
+        text: record.description.slice(0, 300),
         environmentFingerprint: '',
         evidenceCount: 1,
         // A record with no temporal stamp is treated as current, so the default
