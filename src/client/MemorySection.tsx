@@ -11,6 +11,7 @@ import type {
   SessionListResponse,
   SessionReceiptState,
   SessionSummary,
+  SuppressedSessionsSummary,
   ConsolidationModelCatalogResponse,
   ConsolidationModelSelectResponse,
   WorkspaceId,
@@ -315,6 +316,61 @@ export function SessionRow(props: SessionRowProps): React.JSX.Element {
             </MemoryButton>
           </div>
         ) : null}
+      </div>
+    </details>
+  )
+}
+
+/** Props for the collapsed summary of Sessions omitted from the candidate list. */
+export interface SuppressedSessionsProps {
+  readonly suppressed: SuppressedSessionsSummary
+  readonly t: MemoryTranslate
+}
+
+/**
+ * A single collapsed row listing Sessions that cannot yield memory.
+ *
+ * These are Kept, not deleted: the disclosure keeps them reachable for auditing
+ * while removing them from the review workflow. No consolidate action appears
+ * here on purpose — a Session that produced no output has nothing to extract.
+ */
+export function SuppressedSessions(props: SuppressedSessionsProps): React.JSX.Element | null {
+  const { suppressed, t } = props
+  const total = suppressed.failedZeroOutput + suppressed.trivialAutomation
+  if (total === 0) return null
+  return (
+    <details data-memory-suppressed="" style={memorySectionStyles.sessionCard}>
+      <summary style={memorySectionStyles.sessionSummary}>
+        <div style={memorySectionStyles.sessionIdentity}>
+          <strong style={memorySectionStyles.sessionTitle}>
+            {t('sessionSuppressedTitle', { count: total })}
+          </strong>
+          <small style={{ ...memorySectionStyles.sessionId, ...memorySectionStyles.muted }}>
+            {t('sessionSuppressedHelp')}
+          </small>
+        </div>
+        <span aria-hidden="true" data-memory-caret="" style={memorySectionStyles.sessionCaret}>{'▸'}</span>
+      </summary>
+      <div style={memorySectionStyles.sessionBody}>
+        {suppressed.groups.map(group => (
+          <div key={group.fingerprint} data-memory-suppressed-group="">
+            <span>{t('sessionSuppressedGroup', {
+              count: group.count,
+              title: group.title ?? t('sessionUntitled'),
+            })}</span>
+            <small style={{ ...memorySectionStyles.sessionId, ...memorySectionStyles.muted }}>
+              {t('sessionSuppressedRange', {
+                first: formatSessionCreatedAt(group.firstCreatedAt),
+                last: formatSessionCreatedAt(group.lastCreatedAt),
+              })}
+            </small>
+            {group.errorCode === undefined
+              ? null
+              : <code style={memorySectionStyles.debugPath}>
+                  {t('sessionSuppressedError', { code: group.errorCode })}
+                </code>}
+          </div>
+        ))}
       </div>
     </details>
   )
@@ -817,7 +873,16 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
           {sessionBusy && sessions === undefined ? <p>{t('loading')}</p> : null}
           {sessions?.available === false ? <p style={memorySectionStyles.validation}>{t('sessionUnavailable')}</p> : null}
           {sessions?.available === true && sessions.sessions.length === 0
+            && sessions.suppressed.failedZeroOutput + sessions.suppressed.trivialAutomation === 0
             ? <p style={memorySectionStyles.muted}>{t('sessionEmpty')}</p>
+            : null}
+          {/* When every persisted Session was suppressed there is no Workspace to
+              select, so the disclosure has to render outside the split layout. */}
+          {sessions?.available === true && sessions.sessions.length === 0
+            && sessions.suppressed.failedZeroOutput + sessions.suppressed.trivialAutomation > 0
+            ? <div style={memorySectionStyles.sessionList}>
+                <SuppressedSessions suppressed={sessions.suppressed} t={t} />
+              </div>
             : null}
           <div style={memorySectionStyles.workspaceLayout}>
             <aside style={memorySectionStyles.workspaceList} aria-label={t('sessionWorkspaceList')}>
@@ -851,6 +916,12 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
                     </span>
                   </header>
                   <div style={memorySectionStyles.sessionList}>
+                    {/* Rendered above the per-Workspace groups: a Workspace whose
+                        only Sessions were suppressed would otherwise vanish
+                        entirely, taking the explanation with it. */}
+                    {sessions === undefined
+                      ? null
+                      : <SuppressedSessions suppressed={sessions.suppressed} t={t} />}
                     {selectedSessionWorkspace.sessions.map(session => (
                       <SessionRow
                         key={session.sessionId}
