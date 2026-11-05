@@ -32,6 +32,17 @@ import {
   toApprovable,
 } from './memory-dream-approval.ts'
 import { parseGlobalSections } from './memory-global-guard.ts'
+import {
+  DreamAgentWorkerError,
+  runDreamWithAgent,
+  selectGlobalSections,
+  type DreamAgents,
+} from './memory-dream-agent.ts'
+import {
+  parseDreamProposal,
+  type DreamProposalContext,
+} from './memory-dream-proposal.ts'
+import { validateDreamSubmission } from './memory-dream-worker.ts'
 import type { MemoryToolExecution } from './host-contracts.ts'
 import { SessionCatalog } from './session-catalog.ts'
 import { adaptSessionPersistence } from './session-persistence-adapter.ts'
@@ -164,6 +175,9 @@ export function apply(ctx: Context, config: Config = {}): void {
   let sessionCatalog: SessionCatalog | undefined
   let sessionRunner: SessionConsolidationRunner | undefined
   let sessionWorker: SessionConsolidationWorker | undefined
+  // Captured so the RPC handler can reach it: the agents service lives in an
+  // inject callback, not in the handler's scope.
+  let dreamAgents: DreamAgents | undefined
   let sessionProjections: import('./host-contracts.ts').MemorySessionProjections | undefined
   let sessionProjectionCache: import('./host-contracts.ts').MemorySessionProjectionCache | undefined
   let llmCatalog: MemoryLlmCatalog | undefined
@@ -280,6 +294,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       )
       const runner = new SessionConsolidationRunner(consolidator, worker, receipts, commits, replay, store, debug, candidatePool)
       sessionWorker = worker
+      dreamAgents = sessionCtx.agents as unknown as DreamAgents
       sessionRunner = runner
       return () => {
         if (sessionWorker === worker) sessionWorker = undefined
@@ -310,6 +325,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         governance,
         governanceStore,
         dreamReceipts,
+        dreamAgents,
         endpoint,
         payload,
         signal,
@@ -456,6 +472,13 @@ function collectForgettingRecords(
   return collected
 }
 
+/** Optional scope key: Dream runs over one workspace's record set. */
+function parseDreamRunScope(payload: unknown): string | undefined {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return undefined
+  const value = (payload as Record<string, unknown>).scopeKey
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined
+}
+
 /** One receipt rendered for the browser. */
 function toRunView(receipt: {
   runId: string
@@ -482,6 +505,9 @@ function toRunView(receipt: {
     ...(receipt.error === undefined ? {} : { error: receipt.error }),
   }
 }
+
+/** Dream's output budget: the plan is short; the room is for corrections. */
+const DREAM_MAX_TOKENS = 8_192
 
 /** Payload for per-action approval: the fingerprints the user ticked. */
 function parseDreamApprovalPayload(payload: unknown): { runId: string; approved: string[] } {
@@ -548,6 +574,7 @@ async function handleMemoryRpc(
   governance: MemoryGovernanceRegistry,
   governanceStore: MemoryGovernanceStore,
   dreamReceipts: DreamReceiptStore,
+  dreamAgents: DreamAgents | undefined,
   endpoint: string,
   payload: unknown,
   signal: AbortSignal,
@@ -779,8 +806,9 @@ async function handleMemoryRpc(
         return { ok: true, value: { rejected: input.runId, reason: input.reason } }
       }
       case 'dream/run': {
-        // Planning only. Runs Dream, stages the plan, writes no memory.
-        parseEmptyPayload(payload)
+        // Planning only: runs Dream, stages the plan, writes no memory. Approval
+        // is a separate call, so a run cannot change anything by itself.
+        const requestedScope = parseDreamRunScope(payload)
         const mode = consolidationSettings.read().dream
         if (mode === 'off') {
           return {
@@ -788,8 +816,104 @@ async function handleMemoryRpc(
             error: { code: 'bad-request', message: 'dream is disabled in settings', details: {} },
           }
         }
-        return { ok: true, value: { mode, started: false, reason: 'manual-trigger-only' } }
-      }      case 'governance/forgetting': {
+
+        const worker = getSessionWorker()
+        const agents = dreamAgents
+        if (worker === undefined || agents === undefined) {
+          // Saying "started: false" without a reason the caller can act on would
+          // look like a successful no-op.
+          return {
+            ok: false,
+            error: {
+              code: 'internal',
+              message: 'dream worker is not available yet; retry after the plugin finishes loading',
+              details: {},
+            },
+          }
+        }
+
+        // The scope is the workspace this run reads. One run covers one scope so
+        // a plan's targets are always drawn from a single record set.
+        const workspaces = store.listWorkspaces().workspaces
+        const target = workspaces.find(entry => entry.workspaceId === requestedScope) ?? workspaces[0]
+        if (target === undefined) {
+          return {
+            ok: false,
+            error: { code: 'bad-request', message: 'no workspace to run Dream over', details: {} },
+          }
+        }
+
+        const view = store.readWorkspaceById(target.workspaceId)
+        if (view === undefined) {
+          return {
+            ok: false,
+            error: { code: 'bad-request', message: `workspace "${target.workspaceId}" could not be read`, details: {} },
+          }
+        }
+        const document = governanceStore.read(target.workspaceId)
+        const global = store.readGlobalSync()
+        const dreamContext: DreamProposalContext = {
+          scopeKey: target.workspaceId,
+          claims: document.claims,
+          globalSections: selectGlobalSections(global.content),
+          now: Date.now(),
+        }
+
+        const runId = `dream-${Date.now().toString(36)}`
+        const selection = consolidationSettings.read().selection
+        try {
+          const run = await runDreamWithAgent({
+            context: dreamContext,
+            agents,
+            sessionId: runId,
+            cwd: store.root,
+            config: { provider: selection.provider, model: selection.model, maxTokens: DREAM_MAX_TOKENS, reasoningEffort: 'off' },
+            validate: value => {
+              const result = validateDreamSubmission(dreamContext, value)
+              return { accepted: result.accepted, message: result.message }
+            },
+          })
+          // Validate again through the same parser before staging: the agent
+          // layer already did, but staging is where a bad plan would become
+          // approvable, so it is re-checked at the boundary that matters.
+          const plan = parseDreamProposal(run.submission, dreamContext)
+          if (plan.actions.length === 0) {
+            return { ok: true, value: { mode, runId, planned: false, reason: 'no-change' } }
+          }
+          dreamReceipts.writePending(plan, runId, Date.now())
+          return {
+            ok: true,
+            value: { mode, runId, planned: true, actions: plan.actions.length, risk: plan.risk },
+          }
+        } catch (cause: unknown) {
+          const message = cause instanceof Error ? cause.message : String(cause)
+          dreamReceipts.write({
+            runId,
+            scopeKey: target.workspaceId,
+            state: cause instanceof DreamAgentWorkerError && cause.code === 'output-truncated'
+              ? 'output-truncated'
+              : cause instanceof DreamAgentWorkerError && cause.code === 'provider-failed'
+                ? 'provider-failed'
+                : 'rejected',
+            attempt: 1,
+            provider: selection.provider,
+            model: selection.model,
+            beforeRevision: document.revision,
+            afterRevision: document.revision,
+            proposalHash: '',
+            risk: 'metadata-only',
+            changes: [],
+            createdAt: new Date().toISOString(),
+            completedAt: new Date().toISOString(),
+            error: message,
+          })
+          return {
+            ok: false,
+            error: { code: 'internal', message, details: { runId } },
+          }
+        }
+      }
+      case 'governance/forgetting': {
         parseEmptyPayload(payload)
         const mode = consolidationSettings.read().forgetting
         // Shadow-only for now: the report describes what the policy *would* do

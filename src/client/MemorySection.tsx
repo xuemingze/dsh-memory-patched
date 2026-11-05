@@ -38,6 +38,7 @@ export interface MemoryApi {
   dreamReport(signal?: AbortSignal): Promise<Pick<DreamViewProps, 'mode' | 'pending' | 'runs'>>
   dreamApprove(runId: string, approved: readonly string[], signal?: AbortSignal): Promise<unknown>
   dreamReject(runId: string, reason: string, signal?: AbortSignal): Promise<unknown>
+  dreamRun(signal?: AbortSignal): Promise<unknown>
   consolidateSession(sessionId: string, signal?: AbortSignal): Promise<SessionConsolidateResponse>
   readModels(signal?: AbortSignal): Promise<ConsolidationModelCatalogResponse>
   selectModel(input: {
@@ -415,6 +416,8 @@ export interface DreamViewProps {
   /** `approved` holds the fingerprints the user ticked; empty means reject all. */
   readonly onApprove?: (runId: string, approved: readonly string[]) => void
   readonly onDiscard?: (runId: string, reason: string) => void
+  /** Runs one planning pass. Never applies anything. */
+  readonly onRun?: () => void
   readonly busy?: boolean
   readonly t: MemoryTranslate
 }
@@ -455,7 +458,7 @@ const REASON_KEY: Record<string, MemoryLocaleKey> = {
  */
 
 export function DreamView(props: DreamViewProps): React.JSX.Element {
-  const { mode, pending, runs, onApprove, onDiscard, busy = false, t } = props
+  const { mode, pending, runs, onApprove, onDiscard, onRun, busy = false, t } = props
   // Selection lives per run: two staged plans can be open at once.
   const [ticked, setTicked] = useState<Record<string, string[]>>({})
   const [reason, setReason] = useState<string>(REJECT_REASONS[0]!)
@@ -481,6 +484,13 @@ export function DreamView(props: DreamViewProps): React.JSX.Element {
         <div>
           <h3 style={memorySectionStyles.workspaceTitle}>{t('dreamTitle')}</h3>
           <p style={memorySectionStyles.subtitle}>{t('dreamHelp')}</p>
+          {onRun === undefined ? null : (
+            <div>
+              <MemoryButton type="button" variant="primary" disabled={busy} onClick={onRun}>
+                {t('dreamRun')}
+              </MemoryButton>
+            </div>
+          )}
           {mode === undefined ? null : (
             <p style={memorySectionStyles.subtitle}>
               {t('dreamMode')}: <strong>{mode}</strong>
@@ -833,6 +843,26 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
    * An empty selection is a full rejection and writes nothing, which is why it
    * needs a reason: the reason is what stops the next run from re-proposing it.
    */
+  /**
+   * Run one planning pass.
+   *
+   * It writes nothing: the plan is staged and appears in the pending list for a
+   * per-action decision. A failure surfaces in the error banner rather than
+   * being reported as a successful no-op.
+   */
+  const runDream = async (): Promise<void> => {
+    setDreamBusy(true)
+    setError(undefined)
+    try {
+      await props.api.dreamRun()
+      setDream(await props.api.dreamReport())
+    } catch (cause: unknown) {
+      setError({ kind: 'message', value: cause instanceof Error ? cause.message : String(cause) })
+    } finally {
+      setDreamBusy(false)
+    }
+  }
+
   const decideDream = async (runId: string, approved: readonly string[], reason: string): Promise<void> => {
     setDreamBusy(true)
     setError(undefined)
@@ -1205,6 +1235,7 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
                 busy={dreamBusy}
                 onApprove={(runId, approved) => { void decideDream(runId, approved, 'disagree') }}
                 onDiscard={(runId, reason) => { void decideDream(runId, [], reason) }}
+                onRun={() => { void runDream() }}
                 t={t}
               />
             )}

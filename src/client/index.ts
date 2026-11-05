@@ -97,6 +97,7 @@ function createMemoryApi(connection: BrowserConnection): MemoryApi {
       call('dream/proposal/approve', { runId, approved }, signal),
     dreamReject: async (runId, reason, signal) =>
       call('dream/proposal/reject', { runId, reason }, signal),
+    dreamRun: async signal => call('dream/run', {}, signal),
     consolidateSession: async (sessionId, signal) => parseSessionConsolidateResponse(
       await call('sessions/consolidate', { sessionId }, signal),
     ),

@@ -146,6 +146,15 @@ describe('Dream panel', () => {
     expect(html).toContain('disabled')
   })
 
+  it('offers a run button only when a handler is supplied', () => {
+    // Without the handler the button would look clickable and do nothing.
+    const withoutRun = renderToStaticMarkup(<DreamView pending={[]} runs={[]} t={t} />)
+    expect(withoutRun).not.toContain(zh.dreamRun)
+
+    const withRun = renderToStaticMarkup(<DreamView pending={[]} runs={[]} onRun={() => {}} t={t} />)
+    expect(withRun).toContain(zh.dreamRun)
+  })
+
   it('has strings for both locales', () => {
     for (const key of ['dreamTitle', 'dreamHelp', 'dreamApprove', 'dreamDiscard', 'dreamRiskContent'] as const) {
       expect((zh as Record<string, string>)[key]).toBeTruthy()
