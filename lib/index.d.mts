@@ -558,8 +558,16 @@ interface ConsolidationSettingsView {
    * automatic removal must be opted into rather than assumed.
    */
   readonly forgetting: ForgettingMode;
+  /**
+   * Whether Dream may run. `shadow` is the default: Dream may compute a plan and
+   * show it, but nothing is written until the user approves action by action.
+   * `off` disables even planning; `manual` allows approved application.
+   */
+  readonly dream: DreamMode;
   readonly revision: MemoryRevision;
 }
+/** How far Dream is allowed to act. */
+type DreamMode = 'off' | 'shadow' | 'manual';
 /** How far automatic forgetting is allowed to act. */
 type ForgettingMode = 'off' | 'shadow' | 'on';
 /** Plugin-owned settings file; memory Markdown remains the only authoritative memory data. */
@@ -576,6 +584,7 @@ declare class ConsolidationSettingsStore {
     dedupe?: ConsolidationDedupeMode;
     writeGate?: ConsolidationWriteGateMode;
     forgetting?: ForgettingMode;
+    dream?: DreamMode;
   }): {
     status: 'committed';
     revision: MemoryRevision;

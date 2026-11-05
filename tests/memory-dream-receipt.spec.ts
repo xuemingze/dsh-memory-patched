@@ -481,3 +481,97 @@ describe('Two-phase Dream run', () => {
     expect(receipts.listPending().map(entry => entry.runId)).toEqual(['p-b', 'p-a'])
   })
 })
+describe('Approval edge cases from the spec', () => {
+  async function stage(runId: string, actions: unknown[], store = seed()) {
+    const { planDreamSession } = await import('../src/memory-dream-receipt.ts')
+    const receipts = new DreamReceiptStore(root)
+    await planDreamSession({
+      receipts, context: context(), runId, config: {}, now: NOW,
+      callModel: async () => ({ actions }),
+    })
+    return { store, receipts }
+  }
+
+  it('applies only the approved subset (partial approval)', async () => {
+    const { approveDreamPlan } = await import('../src/memory-dream-receipt.ts')
+    const { planActionFingerprint } = await import('../src/memory-dream-approval.ts')
+    const { store, receipts } = await stage('p-partial', [
+      { action: 'cool', target: 'alpha' },
+      { action: 'archive', target: 'beta' },
+    ])
+    // Approve the first action only; the second must stay untouched.
+    approveDreamPlan({
+      store, receipts, runId: 'p-partial', now: NOW,
+      approved: [planActionFingerprint({ action: 'cool', target: 'alpha' })],
+    })
+    const after = store.read('scope-a')
+    expect(after.claims.find(entry => entry.name === 'alpha')?.lifecycle).toBe('cooled')
+    expect(after.claims.find(entry => entry.name === 'beta')?.lifecycle).toBe('active')
+  })
+
+  it('is idempotent against a double click on approve', async () => {
+    const { approveDreamPlan } = await import('../src/memory-dream-receipt.ts')
+    const { store, receipts } = await stage('p-double', [{ action: 'cool', target: 'alpha' }])
+    approveDreamPlan({ store, receipts, runId: 'p-double', now: NOW })
+    // The second click finds no pending plan, so it cannot apply twice.
+    expect(() => approveDreamPlan({ store, receipts, runId: 'p-double', now: NOW }))
+      .toThrow(/no pending plan/u)
+  })
+
+  it('cancelling leaves the store and the pending plan untouched', async () => {
+    const { discardDreamPlan } = await import('../src/memory-dream-receipt.ts')
+    const { store, receipts } = await stage('p-cancel', [{ action: 'archive', target: 'beta' }])
+    const before = store.read('scope-a').revision
+    discardDreamPlan(receipts, 'p-cancel')
+    expect(store.read('scope-a').revision).toBe(before)
+    expect(receipts.readPending('p-cancel')).toBeUndefined()
+    expect(receipts.read('p-cancel')).toBeUndefined()
+  })
+
+  it('reports source-changed when the store moved between plan and approve', async () => {
+    const { approveDreamPlan } = await import('../src/memory-dream-receipt.ts')
+    const { store, receipts } = await stage('p-stale', [{ action: 'cool', target: 'alpha' }])
+    // Someone else replaced the record set in the meantime.
+    store.replace({
+      format: 1, scopeKey: 'scope-a', revision: 'gov1:aaaaaaaaaaaaaaaa',
+      claims: [claim({ name: 'gamma' })], degraded: false,
+    })
+    const result = approveDreamPlan({ store, receipts, runId: 'p-stale', now: NOW })
+    expect(result.receipt.state).toBe('stale-scope')
+    // The pending plan survives so the user can see what failed.
+    expect(store.read('scope-a').claims.map(entry => entry.name)).toEqual(['gamma'])
+  })
+
+  it('records provider-unavailable as a run the panel can show', async () => {
+    const { planDreamSession } = await import('../src/memory-dream-receipt.ts')
+    const receipts = new DreamReceiptStore(root)
+    const result = await planDreamSession({
+      receipts, context: context(), runId: 'p-provider', config: {}, now: NOW,
+      callModel: async () => { throw new Error('provider unavailable') },
+    })
+    expect(result.planned).toBe(false)
+    if (!result.planned) {
+      expect(result.receipt.state).toBe('provider-failed')
+      expect(result.receipt.error).toMatch(/provider unavailable/u)
+    }
+  })
+
+  it('remembers a rejection so the same snapshot is not re-suggested', async () => {
+    const { planActionFingerprint } = await import('../src/memory-dream-approval.ts')
+    const { receipts } = await stage('p-reject', [{ action: 'cool', target: 'alpha' }])
+    const print = planActionFingerprint({ action: 'cool', target: 'alpha' })
+    receipts.recordRejection('scope-a', print, 'disagree', NOW)
+    const declined = receipts.readRejections('scope-a')
+    expect(declined).toHaveLength(1)
+    expect(declined[0]?.reason).toBe('disagree')
+  })
+
+  it('replaces the reason when the same action is declined twice', async () => {
+    const { receipts } = await stage('p-reject2', [])
+    receipts.recordRejection('scope-a', 'fp', 'disagree', NOW)
+    receipts.recordRejection('scope-a', 'fp', 'not-important', NOW + 1)
+    const declined = receipts.readRejections('scope-a')
+    expect(declined).toHaveLength(1)
+    expect(declined[0]?.reason).toBe('not-important')
+  })
+})

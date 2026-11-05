@@ -24,6 +24,12 @@ import {
   dreamPlanHash,
   toChange,
 } from './memory-dream-receipt.ts'
+import {
+  isRejectReason,
+  planActionFingerprint,
+  selectApprovedActions,
+  toApprovable,
+} from './memory-dream-approval.ts'
 import type { MemoryToolExecution } from './host-contracts.ts'
 import { SessionCatalog } from './session-catalog.ts'
 import { adaptSessionPersistence } from './session-persistence-adapter.ts'
@@ -448,6 +454,75 @@ function collectForgettingRecords(
   return collected
 }
 
+/** One receipt rendered for the browser. */
+function toRunView(receipt: {
+  runId: string
+  scopeKey: string
+  state: string
+  risk: string
+  proposalHash: string
+  beforeRevision: string
+  afterRevision: string
+  changes: readonly { action: string; target: string; sources?: readonly string[] }[]
+  createdAt: string
+  error?: string
+}): Record<string, unknown> {
+  return {
+    runId: receipt.runId,
+    scopeKey: receipt.scopeKey,
+    state: receipt.state,
+    risk: receipt.risk,
+    proposalHash: receipt.proposalHash,
+    beforeRevision: receipt.beforeRevision,
+    afterRevision: receipt.afterRevision,
+    changes: receipt.changes,
+    createdAt: Date.parse(receipt.createdAt),
+    ...(receipt.error === undefined ? {} : { error: receipt.error }),
+  }
+}
+
+/** Payload for per-action approval: the fingerprints the user ticked. */
+function parseDreamApprovalPayload(payload: unknown): { runId: string; approved: string[] } {
+  const record = parseDreamRunRecord(payload)
+  const approved = record.approved
+  if (!Array.isArray(approved) || approved.some(entry => typeof entry !== 'string')) {
+    throw new TypeError('dream approval payload.approved must be a list of action fingerprints')
+  }
+  return { runId: record.runId, approved: approved as string[] }
+}
+
+/** Payload for rejecting one action, or the whole plan when no fingerprint is given. */
+function parseDreamRejectPayload(payload: unknown): {
+  runId: string
+  reason: string
+  fingerprint?: string
+} {
+  const record = parseDreamRunRecord(payload)
+  if (!isRejectReason(record.reason)) {
+    throw new TypeError('dream reject payload.reason must be a known reason code')
+  }
+  const fingerprint = record.fingerprint
+  if (fingerprint !== undefined && typeof fingerprint !== 'string') {
+    throw new TypeError('dream reject payload.fingerprint must be a string')
+  }
+  return {
+    runId: record.runId,
+    reason: record.reason,
+    ...(fingerprint === undefined ? {} : { fingerprint }),
+  }
+}
+
+function parseDreamRunRecord(payload: unknown): { runId: string } & Record<string, unknown> {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new TypeError('dream payload must be an object')
+  }
+  const record = payload as Record<string, unknown>
+  if (typeof record.runId !== 'string' || record.runId.trim() === '') {
+    throw new TypeError('dream payload.runId must be a non-empty string')
+  }
+  return record as { runId: string } & Record<string, unknown>
+}
+
 /** Payload for approving or discarding one staged Dream run. */
 function parseDreamRunPayload(payload: unknown): { runId: string } {
   if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
@@ -583,14 +658,19 @@ async function handleMemoryRpc(
           },
         }
       }
-      case 'dream/plan': {
-        // Planning is read-only with respect to memory: it stages the plan and
-        // waits. A content-changing plan never applies without dream/approve.
+      case 'dream/status': {
+        // Read-only: mode, what is waiting, and what was recently decided. No
+        // endpoint in this block writes memory; that is dream/proposal/approve.
         parseEmptyPayload(payload)
+        const mode = consolidationSettings.read().dream
         const pending = dreamReceipts.listPending()
+        const declined = pending.length === 0
+          ? new Set<string>()
+          : new Set(dreamReceipts.readRejections(pending[0]!.runId).map(entry => entry.fingerprint))
         return {
           ok: true,
           value: {
+            mode,
             pending: pending.map(entry => {
               const held = dreamReceipts.readPending(entry.runId)
               return {
@@ -599,42 +679,87 @@ async function handleMemoryRpc(
                 state: 'planned',
                 risk: held?.plan.risk ?? 'metadata-only',
                 proposalHash: held === undefined ? '' : dreamPlanHash(held.plan),
-                actions: (held?.plan.actions ?? []).map(toChange),
+                actions: (held?.plan.actions ?? []).map(toApprovable),
                 createdAt: entry.createdAt,
+                // Previously declined actions are marked so the panel does not
+                // present them as fresh suggestions.
+                declined: (held?.plan.actions ?? [])
+                  .map(toApprovable)
+                  .filter(action => declined.has(planActionFingerprint(action)))
+                  .map(action => planActionFingerprint(action)),
               }
             }),
-            runs: dreamReceipts.list().slice(0, 20).map(receipt => ({
-              runId: receipt.runId,
-              scopeKey: receipt.scopeKey,
-              state: receipt.state,
-              risk: receipt.risk,
-              proposalHash: receipt.proposalHash,
-              beforeRevision: receipt.beforeRevision,
-              afterRevision: receipt.afterRevision,
-              changes: receipt.changes,
-              createdAt: Date.parse(receipt.createdAt),
-              ...(receipt.error === undefined ? {} : { error: receipt.error }),
-            })),
+            runs: dreamReceipts.list().slice(0, 20).map(toRunView),
           },
         }
       }
-      case 'dream/approve': {
+      case 'dream/proposal/read': {
         const input = parseDreamRunPayload(payload)
+        const held = dreamReceipts.readPending(input.runId)
+        if (held === undefined) throw new DreamReceiptError(`no pending plan for run "${input.runId}"`)
+        return {
+          ok: true,
+          value: {
+            runId: input.runId,
+            scopeKey: held.plan.scopeKey,
+            state: 'planned',
+            risk: held.plan.risk,
+            proposalHash: dreamPlanHash(held.plan),
+            actions: held.plan.actions.map(toApprovable),
+            createdAt: held.createdAt,
+          },
+        }
+      }
+      case 'dream/proposal/approve': {
+        // Per-action: the browser sends the fingerprints the user ticked. An
+        // empty list is a full rejection and writes nothing.
+        const input = parseDreamApprovalPayload(payload)
+        const held = dreamReceipts.readPending(input.runId)
+        if (held === undefined) throw new DreamReceiptError(`no pending plan for run "${input.runId}"`)
+        const selected = selectApprovedActions(held.plan.actions.map(toApprovable), input.approved)
+        if (selected.length === 0) {
+          return { ok: true, value: { state: 'rejected', applied: 0 } }
+        }
+        const partial = selected.length !== held.plan.actions.length
         const result = approveDreamPlan({
           store: governanceStore,
           receipts: dreamReceipts,
           runId: input.runId,
           now: Date.now(),
+          // Only the ticked actions are applied; the rest stay unapplied, which
+          // is the whole point of per-action approval.
+          approved: input.approved,
+          ...(partial ? { partial: true } : {}),
         })
-        return { ok: true, value: result.receipt }
+        return { ok: true, value: toRunView(result.receipt) }
       }
-      case 'dream/discard': {
-        const input = parseDreamRunPayload(payload)
-        // Declining a plan writes nothing, so there is nothing to undo.
-        discardDreamPlan(dreamReceipts, input.runId)
-        return { ok: true, value: { discarded: input.runId } }
+      case 'dream/proposal/reject': {
+        // The reason code is stored so the same snapshot does not re-propose
+        // what the user just declined.
+        const input = parseDreamRejectPayload(payload)
+        const held = dreamReceipts.readPending(input.runId)
+        if (held !== undefined) {
+          for (const action of held.plan.actions.map(toApprovable)) {
+            if (input.fingerprint === undefined || planActionFingerprint(action) === input.fingerprint) {
+              dreamReceipts.recordRejection(held.plan.scopeKey, planActionFingerprint(action), input.reason, Date.now())
+            }
+          }
+        }
+        if (input.fingerprint === undefined) discardDreamPlan(dreamReceipts, input.runId)
+        return { ok: true, value: { rejected: input.runId, reason: input.reason } }
       }
-      case 'governance/forgetting': {
+      case 'dream/run': {
+        // Planning only. Runs Dream, stages the plan, writes no memory.
+        parseEmptyPayload(payload)
+        const mode = consolidationSettings.read().dream
+        if (mode === 'off') {
+          return {
+            ok: false,
+            error: { code: 'bad-request', message: 'dream is disabled in settings', details: {} },
+          }
+        }
+        return { ok: true, value: { mode, started: false, reason: 'manual-trigger-only' } }
+      }      case 'governance/forgetting': {
         parseEmptyPayload(payload)
         const mode = consolidationSettings.read().forgetting
         // Shadow-only for now: the report describes what the policy *would* do

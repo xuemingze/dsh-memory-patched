@@ -42,8 +42,18 @@ export interface ConsolidationSettingsView {
    * automatic removal must be opted into rather than assumed.
    */
   readonly forgetting: ForgettingMode
+  /**
+   * Whether Dream may run. `shadow` is the default: Dream may compute a plan and
+   * show it, but nothing is written until the user approves action by action.
+   * `off` disables even planning; `manual` allows approved application.
+   */
+  readonly dream: DreamMode
   readonly revision: MemoryRevision
 }
+
+/** How far Dream is allowed to act. */
+export type DreamMode = 'off' | 'shadow' | 'manual'
+export const DREAM_MODES: readonly DreamMode[] = ['off', 'shadow', 'manual']
 
 /** How far automatic forgetting is allowed to act. */
 export type ForgettingMode = 'off' | 'shadow' | 'on'
@@ -85,6 +95,7 @@ export class ConsolidationSettingsStore {
       dedupe: 'merge',
       writeGate: 'on',
       forgetting: 'shadow',
+      dream: 'shadow',
     }
   }
 
@@ -95,6 +106,7 @@ export class ConsolidationSettingsStore {
     dedupe?: ConsolidationDedupeMode
     writeGate?: ConsolidationWriteGateMode
     forgetting?: ForgettingMode
+    dream?: DreamMode
   }): { status: 'committed'; revision: MemoryRevision } | { status: 'conflict'; currentRevision: MemoryRevision } {
     const current = this.read()
     if (current.revision !== input.expectedRevision) {
@@ -109,6 +121,7 @@ export class ConsolidationSettingsStore {
       // Same rule as dedupe/writeGate: a caller that predates this setting must
       // not silently reset it to the default.
       forgetting: input.forgetting === undefined ? current.forgetting : coerceForgettingStrict(input.forgetting),
+      dream: input.dream === undefined ? current.dream : coerceDreamStrict(input.dream),
     }
     mkdirSync(dirname(this.path), { recursive: true })
     const temporary = `${this.path}.tmp-${process.pid}-${randomUUID()}`
@@ -197,6 +210,7 @@ function parseSettings(source: string): Omit<ConsolidationSettingsView, 'revisio
       dedupe: 'merge',
       writeGate: 'on',
       forgetting: 'shadow',
+      dream: 'shadow',
     }
   }
   // Files written before the dedupe/candidates/forgetting settings lack the keys:
@@ -206,7 +220,7 @@ function parseSettings(source: string): Omit<ConsolidationSettingsView, 'revisio
     'debug,format,model,provider',
     'debug,dedupe,format,model,provider',
     'candidates,debug,dedupe,format,model,provider',
-    'candidates,debug,dedupe,forgetting,format,model,provider',
+    'candidates,debug,dedupe,dream,forgetting,format,model,provider',
   ]
   if (record.format !== SETTINGS_FORMAT || !validV2Keys.includes(keys)) {
     throw new TypeError('Memory consolidation settings have missing or unknown fields')
@@ -217,7 +231,19 @@ function parseSettings(source: string): Omit<ConsolidationSettingsView, 'revisio
     dedupe: coerceDedupeMode(record.dedupe),
     writeGate: coerceWriteGate(record.candidates),
     forgetting: coerceForgettingMode(record.forgetting),
+    dream: coerceDreamMode(record.dream),
   }
+}
+
+function coerceDreamMode(value: unknown): DreamMode {
+  return DREAM_MODES.includes(value as DreamMode) ? value as DreamMode : 'shadow'
+}
+
+function coerceDreamStrict(value: DreamMode): DreamMode {
+  if (!DREAM_MODES.includes(value)) {
+    throw new TypeError('memory dream must be one of off, shadow, manual')
+  }
+  return value
 }
 
 function coerceForgettingMode(value: unknown): ForgettingMode {
@@ -266,6 +292,7 @@ function serializeSettings(settings: Omit<ConsolidationSettingsView, 'revision'>
     dedupe: settings.dedupe,
     candidates: settings.writeGate,
     forgetting: settings.forgetting,
+    dream: settings.dream,
   }, { lineWidth: 0 })
 }
 

@@ -1,6 +1,7 @@
 /** Settings section for Global Memory, Workspace Memory, Session Consolidation, and preferences. */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { REJECT_REASONS } from '../memory-dream-approval.ts'
 import type {
   GlobalMemoryView,
   GlobalReplaceResponse,
@@ -35,8 +36,8 @@ export interface MemoryApi {
   listSessions(signal?: AbortSignal): Promise<SessionListResponse>
   forgettingReport(signal?: AbortSignal): Promise<ForgettingReportViewProps['report']>
   dreamReport(signal?: AbortSignal): Promise<Pick<DreamViewProps, 'pending' | 'runs'>>
-  dreamApprove(runId: string, signal?: AbortSignal): Promise<unknown>
-  dreamDiscard(runId: string, signal?: AbortSignal): Promise<unknown>
+  dreamApprove(runId: string, approved: readonly string[], signal?: AbortSignal): Promise<unknown>
+  dreamReject(runId: string, reason: string, signal?: AbortSignal): Promise<unknown>
   consolidateSession(sessionId: string, signal?: AbortSignal): Promise<SessionConsolidateResponse>
   readModels(signal?: AbortSignal): Promise<ConsolidationModelCatalogResponse>
   selectModel(input: {
@@ -397,6 +398,8 @@ export interface DreamViewProps {
     readonly proposalHash: string
     readonly actions: readonly DreamActionViewProps[]
     readonly createdAt: number
+    /** Fingerprints the user already declined; shown greyed, not as fresh. */
+    readonly declined?: readonly string[]
   }[]
   readonly runs: readonly {
     readonly runId: string
@@ -407,24 +410,69 @@ export interface DreamViewProps {
     readonly createdAt: number
     readonly error?: string
   }[]
-  readonly onApprove?: (runId: string) => void
-  readonly onDiscard?: (runId: string) => void
+  /** `approved` holds the fingerprints the user ticked; empty means reject all. */
+  readonly onApprove?: (runId: string, approved: readonly string[]) => void
+  readonly onDiscard?: (runId: string, reason: string) => void
   readonly busy?: boolean
   readonly t: MemoryTranslate
 }
 
 /**
+ * Explicit key maps.
+ *
+ * `en` is declared `as const`, so `MemoryLocaleKey` is a union of literals and a
+ * template-literal expression like `` `${id}Tab` `` cannot index it. Mapping by
+ * hand also makes a missing translation a compile error rather than a raw key
+ * rendered into the panel.
+ */
+const TAB_KEY: Record<string, MemoryLocaleKey> = {
+  global: 'globalTab',
+  workspaces: 'workspacesTab',
+  sessions: 'sessionsTab',
+  forgetting: 'forgettingTab',
+  dream: 'dreamTab',
+  settings: 'settingsTab',
+}
+
+const REASON_KEY: Record<string, MemoryLocaleKey> = {
+  'wrong-merge': 'dreamReason_wrong_merge',
+  disagree: 'dreamReason_disagree',
+  'not-important': 'dreamReason_not_important',
+  'already-known': 'dreamReason_already_known',
+}
+
+/**
  * Dream's staging area.
  *
- * A pending plan is shown as a list of handles with two buttons, and nothing has
- * touched memory yet. The risk label is the important part: a plan that rewrites
- * bodies reads differently from one that only moves metadata, because only the
- * first can lose information.
+ * Approval is per action, so each proposed change has its own checkbox and the
+ * buttons act on what is ticked. An all-or-nothing yes would force the user to
+ * accept one bad action to get the good ones, and people respond to that by
+ * approving without reading.
  *
- * There is no action here that applies a plan silently, and none that deletes.
+ * Nothing here applies a plan silently, and nothing deletes.
  */
+
 export function DreamView(props: DreamViewProps): React.JSX.Element {
   const { pending, runs, onApprove, onDiscard, busy = false, t } = props
+  // Selection lives per run: two staged plans can be open at once.
+  const [ticked, setTicked] = useState<Record<string, string[]>>({})
+  const [reason, setReason] = useState<string>(REJECT_REASONS[0]!)
+
+  const fingerprintOf = (action: DreamActionViewProps): string =>
+    `${action.action}\u0000${action.target}\u0000${[...(action.sources ?? [])].sort().join(',')}`
+
+  const toggle = (runId: string, fingerprint: string): void => {
+    setTicked(current => {
+      const held = current[runId] ?? []
+      return {
+        ...current,
+        [runId]: held.includes(fingerprint)
+          ? held.filter(entry => entry !== fingerprint)
+          : [...held, fingerprint],
+      }
+    })
+  }
+
   return (
     <section data-memory-dream="" style={memorySectionStyles.sessionCard}>
       <header style={memorySectionStyles.workspaceHeading}>
@@ -439,45 +487,74 @@ export function DreamView(props: DreamViewProps): React.JSX.Element {
         ? <p style={memorySectionStyles.subtitle}>{t('dreamNoPending')}</p>
         : (
           <ul style={memorySectionStyles.list}>
-            {pending.map(entry => (
-              <li key={entry.runId} data-dream-pending={entry.runId} style={memorySectionStyles.sessionCard}>
-                <div style={memorySectionStyles.sessionSummary}>
-                  <code>{entry.runId}</code>
-                  <span style={memorySectionStyles.badge}>
-                    {entry.risk === 'content-change' ? t('dreamRiskContent') : t('dreamRiskMetadata')}
-                  </span>
-                  <span style={memorySectionStyles.badge}>
-                    {t('dreamActionsCount')} {entry.actions.length}
-                  </span>
-                </div>
-                <ul style={memorySectionStyles.list}>
-                  {entry.actions.map((action, index) => (
-                    <li key={`${entry.runId}-${index}`}>
-                      <code>{action.action}</code> → <strong>{action.target}</strong>
-                      {action.sources === undefined ? null : ` (${action.sources.join(', ')})`}
-                      {action.rationale === undefined ? null : <em> — {action.rationale}</em>}
-                    </li>
-                  ))}
-                </ul>
-                <div>
-                  <MemoryButton
-                    type="button"
-                    variant="primary"
-                    disabled={busy}
-                    onClick={() => { onApprove?.(entry.runId) }}
-                  >
-                    {t('dreamApprove')}
-                  </MemoryButton>
-                  <MemoryButton
-                    type="button"
-                    disabled={busy}
-                    onClick={() => { onDiscard?.(entry.runId) }}
-                  >
-                    {t('dreamDiscard')}
-                  </MemoryButton>
-                </div>
-              </li>
-            ))}
+            {pending.map(entry => {
+              const declined = new Set(entry.declined ?? [])
+              const selected = ticked[entry.runId] ?? []
+              return (
+                <li key={entry.runId} data-dream-pending={entry.runId} style={memorySectionStyles.sessionCard}>
+                  <div style={memorySectionStyles.sessionSummary}>
+                    <code>{entry.runId}</code>
+                    <span style={memorySectionStyles.badge}>
+                      {entry.risk === 'content-change' ? t('dreamRiskContent') : t('dreamRiskMetadata')}
+                    </span>
+                    <span style={memorySectionStyles.badge}>
+                      {t('dreamActionsCount')} {entry.actions.length}
+                    </span>
+                  </div>
+                  <ul style={memorySectionStyles.list}>
+                    {entry.actions.map((action, index) => {
+                      const fingerprint = fingerprintOf(action)
+                      const alreadyDeclined = declined.has(fingerprint)
+                      return (
+                        <li key={`${entry.runId}-${index}`} data-dream-action={fingerprint}>
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={selected.includes(fingerprint)}
+                              disabled={busy || alreadyDeclined}
+                              onChange={() => { toggle(entry.runId, fingerprint) }}
+                            />
+                            <code>{action.action}</code> → <strong>{action.target}</strong>
+                            {action.sources === undefined ? null : ` (${action.sources.join(', ')})`}
+                            {action.rationale === undefined ? null : <em> — {action.rationale}</em>}
+                            {alreadyDeclined ? <span style={memorySectionStyles.badge}>{t('dreamAlreadyDeclined')}</span> : null}
+                          </label>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                  <div>
+                    <MemoryButton
+                      type="button"
+                      variant="primary"
+                      disabled={busy || selected.length === 0}
+                      onClick={() => { onApprove?.(entry.runId, selected) }}
+                    >
+                      {t('dreamApprove')}
+                    </MemoryButton>
+                    <select
+                      value={reason}
+                      disabled={busy}
+                      onChange={event => { setReason(event.target.value) }}
+                      aria-label={t('dreamRejectReason')}
+                    >
+                      {REJECT_REASONS.map(entry => (
+                        <option key={entry} value={entry}>
+                          {t(REASON_KEY[entry] ?? 'dreamRejectReason')}
+                        </option>
+                      ))}
+                    </select>
+                    <MemoryButton
+                      type="button"
+                      disabled={busy}
+                      onClick={() => { onDiscard?.(entry.runId, reason) }}
+                    >
+                      {t('dreamDiscard')}
+                    </MemoryButton>
+                  </div>
+                </li>
+              )
+            })}
           </ul>
         )}
 
@@ -741,12 +818,18 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
     }
   }
 
-  const decideDream = async (runId: string, approve: boolean): Promise<void> => {
+  /**
+   * Send the ticked actions for one run.
+   *
+   * An empty selection is a full rejection and writes nothing, which is why it
+   * needs a reason: the reason is what stops the next run from re-proposing it.
+   */
+  const decideDream = async (runId: string, approved: readonly string[], reason: string): Promise<void> => {
     setDreamBusy(true)
     setError(undefined)
     try {
-      if (approve) await props.api.dreamApprove(runId)
-      else await props.api.dreamDiscard(runId)
+      if (approved.length === 0) await props.api.dreamReject(runId, reason)
+      else await props.api.dreamApprove(runId, approved)
       setDream(await props.api.dreamReport())
     } catch (cause: unknown) {
       setError({ kind: 'message', value: cause instanceof Error ? cause.message : String(cause) })
@@ -1110,8 +1193,8 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
                 pending={dream.pending}
                 runs={dream.runs}
                 busy={dreamBusy}
-                onApprove={runId => { void decideDream(runId, true) }}
-                onDiscard={runId => { void decideDream(runId, false) }}
+                onApprove={(runId, approved) => { void decideDream(runId, approved, 'disagree') }}
+                onDiscard={(runId, reason) => { void decideDream(runId, [], reason) }}
                 t={t}
               />
             )}

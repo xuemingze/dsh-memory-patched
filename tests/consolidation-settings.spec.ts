@@ -35,7 +35,8 @@ describe('ConsolidationSettingsStore', () => {
     expect(committed.status).toBe('committed')
     expect(store.read().selection).toEqual({ provider: 'openai', model: 'gpt-small' })
     expect(store.read().debugEnabled).toBe(true)
-    expect(readFileSync(store.path, 'utf8')).toBe('format: 2\nprovider: openai\nmodel: gpt-small\ndebug: true\ndedupe: merge\ncandidates: on\nforgetting: shadow\n')
+    expect(readFileSync(store.path, 'utf8')).toBe('format: 2\nprovider: openai\nmodel: gpt-small\ndebug: true\ndedupe: merge\ncandidates: on\nforgetting: shadow\ndream: shadow\n')
+    expect(readFileSync(store.path, 'utf8')).toBe('format: 2\nprovider: openai\nmodel: gpt-small\ndebug: true\ndedupe: merge\ncandidates: on\nforgetting: shadow\ndream: shadow\n')
     expect(store.commit({
       expectedRevision: initial.revision,
       selection: { provider: 'other', model: 'other' },
@@ -59,7 +60,7 @@ describe('ConsolidationSettingsStore', () => {
         debugEnabled: false,
       })).toMatchObject({ status: 'committed' })
       expect(readFileSync(join(root, 'settings.yml'), 'utf8'))
-        .toBe('format: 2\nprovider: default\nmodel: cheap\ndebug: false\ndedupe: merge\ncandidates: on\nforgetting: shadow\n')
+        .toBe('format: 2\nprovider: default\nmodel: cheap\ndebug: false\ndedupe: merge\ncandidates: on\nforgetting: shadow\ndream: shadow\n')
     } finally {
       warn.mockRestore()
     }

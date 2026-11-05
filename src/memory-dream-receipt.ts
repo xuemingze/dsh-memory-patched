@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { DreamAction, DreamPlan, DreamProposalContext, DreamRisk } from './memory-dream-proposal.ts'
+import { planActionFingerprint, toApprovable } from './memory-dream-approval.ts'
 import {
   DEFAULT_DREAM_WORKER_CONFIG,
   DreamWorkerError,
@@ -179,6 +180,37 @@ export class DreamReceiptStore {
     return join(this.#root, 'pending')
   }
 
+  /**
+   * Remember that a user declined one action, with the reason.
+   *
+   * Without this the next run over the same snapshot re-proposes exactly what
+   * was just dismissed, and the user learns to ignore the panel.
+   */
+  recordRejection(scopeKey: string, fingerprint: string, reason: string, now: number): void {
+    mkdirSync(this.#rejectRoot, { recursive: true })
+    const file = join(this.#rejectRoot, `${this.#check(scopeKey.replace(/[^A-Za-z0-9._-]/gu, '_'))}.json`)
+    const current = this.readRejections(scopeKey)
+    const next = current.filter(entry => entry.fingerprint !== fingerprint)
+    next.push({ fingerprint, reason, at: now })
+    writeFileSync(file, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
+  }
+
+  /** Fingerprints already declined for this scope. */
+  readRejections(scopeKey: string): Array<{ fingerprint: string; reason: string; at: number }> {
+    const file = join(this.#rejectRoot, `${this.#check(scopeKey.replace(/[^A-Za-z0-9._-]/gu, '_'))}.json`)
+    if (!existsSync(file)) return []
+    try {
+      const parsed = JSON.parse(readFileSync(file, 'utf8')) as Array<{ fingerprint: string; reason: string; at: number }>
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+
+  get #rejectRoot(): string {
+    return join(this.#root, 'rejected')
+  }
+
   /** Reject an unsafe run id before it reaches the filesystem. */
   #check(runId: string): string {
     if (!/^[A-Za-z0-9._-]+$/u.test(runId) || runId === '.' || runId === '..') {
@@ -227,6 +259,8 @@ export function toChange(action: DreamAction): DreamReceiptChange {
 export interface DreamApplyResult {
   readonly applied: number
   readonly afterRevision: string
+  /** Section and text of each promotion that still needs writing to GLOBAL. */
+  readonly promotions: readonly { readonly section: string; readonly text: string; readonly source: string }[]
 }
 
 /**
@@ -255,8 +289,16 @@ export function applyDreamPlan(
   }
 
   const upserts = plan.actions.map(action => applyOne(action, byName, plan.scopeKey, now))
+  // Promotions are reported rather than written here: GLOBAL lives in Markdown,
+  // which this layer does not own. The caller writes them through the guard, so
+  // the append-only rule is enforced in exactly one place.
+  const promotions = plan.actions
+    .filter((action): action is Extract<DreamAction, { action: 'promote-global' }> =>
+      action.action === 'promote-global')
+    .map(action => ({ section: action.section, text: action.text, source: action.source }))
+
   if (upserts.length === 0) {
-    return { applied: 0, afterRevision: document.revision }
+    return { applied: 0, afterRevision: document.revision, promotions }
   }
 
   const result = store.commit({
@@ -265,7 +307,7 @@ export function applyDreamPlan(
     upserts,
     removals: [],
   })
-  return { applied: upserts.length, afterRevision: result.revision }
+  return { applied: upserts.length, afterRevision: result.revision, promotions }
 }
 
 /** Every existing record name an action points at. */
@@ -579,6 +621,12 @@ export interface ApproveDreamOptions {
   /** Provider and model are copied from the pending header when unknown here. */
   readonly provider?: string
   readonly model?: string
+  /**
+   * Fingerprints the user approved. Omitted means the whole plan, which is what
+   * a direct caller wants; the RPC always passes the explicit list.
+   */
+  readonly approved?: readonly string[]
+  readonly partial?: boolean
 }
 
 /**
@@ -595,8 +643,19 @@ export function approveDreamPlan(options: ApproveDreamOptions): { receipt: Dream
   const document = options.store.read(pending.plan.scopeKey)
   const createdAt = new Date(options.now).toISOString()
 
+  // Apply only what was approved. An empty selection is a full rejection and is
+  // handled by the caller, so reaching here with nothing selected is a bug.
+  const approvedSet = options.approved === undefined ? undefined : new Set(options.approved)
+  const chosen = approvedSet === undefined
+    ? pending.plan.actions
+    : pending.plan.actions.filter(action => approvedSet.has(planActionFingerprint(toApprovable(action))))
+  if (chosen.length === 0) {
+    throw new DreamReceiptError(`no approved actions for run "${options.runId}"`)
+  }
+  const planToApply: DreamPlan = { ...pending.plan, actions: chosen }
+
   try {
-    const applied = applyDreamPlan(options.store, pending.plan, options.now)
+    const applied = applyDreamPlan(options.store, planToApply, options.now)
     const receipt = options.receipts.write({
       runId: options.runId,
       scopeKey: pending.plan.scopeKey,

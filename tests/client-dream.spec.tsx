@@ -52,6 +52,50 @@ describe('Dream panel', () => {
     expect(buttonLabels).toEqual([zh.dreamApprove, zh.dreamDiscard])
   })
 
+  it('gives every action its own checkbox', () => {
+    // Per-action approval is the point: an all-or-nothing yes trains people to
+    // approve without reading.
+    const html = renderToStaticMarkup(
+      <DreamView
+        pending={[pending({
+          actions: [
+            { action: 'cool', target: 'alpha' },
+            { action: 'archive', target: 'beta' },
+          ],
+        })]}
+        runs={[]}
+        t={t}
+      />,
+    )
+    const boxes = [...html.matchAll(/data-dream-action="([^"]+)"/gu)].map(match => match[1])
+    expect(boxes).toHaveLength(2)
+    expect(html).toContain('type="checkbox"')
+  })
+
+  it('offers a reason code when declining', () => {
+    const html = renderToStaticMarkup(<DreamView pending={[pending()]} runs={[]} t={t} />)
+    expect(html).toContain('<select')
+    for (const reason of ['wrong-merge', 'disagree', 'not-important', 'already-known']) {
+      expect(html).toContain(`value="${reason}"`)
+    }
+  })
+
+  it('marks an already-declined action and disables its checkbox', () => {
+    const declinedPrint = 'cool\u0000alpha\u0000'
+    const html = renderToStaticMarkup(
+      <DreamView pending={[pending({ declined: [declinedPrint] })]} runs={[]} t={t} />,
+    )
+    expect(html).toContain(zh.dreamAlreadyDeclined)
+    expect(html).toMatch(/type="checkbox"[^>]*disabled/u)
+  })
+
+  it('disables approve until something is ticked', () => {
+    // An empty selection is a rejection, so the approve button must not look
+    // available when nothing is chosen.
+    const html = renderToStaticMarkup(<DreamView pending={[pending()]} runs={[]} t={t} />)
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>[^<]*批准/u)
+  })
+
   it('says so when nothing is waiting', () => {
     const html = renderToStaticMarkup(<DreamView pending={[]} runs={[]} t={t} />)
     expect(html).toContain(zh.dreamNoPending)

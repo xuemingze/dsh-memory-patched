@@ -90,11 +90,13 @@ function createMemoryApi(connection: BrowserConnection): MemoryApi {
     commitWorkspace: async (input, signal) => parseWorkspaceCommitResponse(await call('workspace/commit', input, signal)),
     listSessions: async signal => parseSessionListResponse(await call('sessions/list', {}, signal)),
     forgettingReport: async signal => parseForgettingReportResponse(await call('governance/forgetting', {}, signal)),
-    // The panel shows staged plans and recent runs together; a plan is never
-    // applied by reading it.
-    dreamReport: async signal => parseDreamPanelResponse(await call('dream/plan', {}, signal)),
-    dreamApprove: async (runId, signal) => call('dream/approve', { runId }, signal),
-    dreamDiscard: async (runId, signal) => call('dream/discard', { runId }, signal),
+    // Reading the panel never applies anything: status is read-only and a plan
+    // only moves through proposal/approve or proposal/reject.
+    dreamReport: async signal => parseDreamPanelResponse(await call('dream/status', {}, signal)),
+    dreamApprove: async (runId, approved, signal) =>
+      call('dream/proposal/approve', { runId, approved }, signal),
+    dreamReject: async (runId, reason, signal) =>
+      call('dream/proposal/reject', { runId, reason }, signal),
     consolidateSession: async (sessionId, signal) => parseSessionConsolidateResponse(
       await call('sessions/consolidate', { sessionId }, signal),
     ),
