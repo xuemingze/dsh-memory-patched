@@ -248,7 +248,7 @@ describe('SessionConsolidationWorker', () => {
       },
       async (selection, ceiling) => {
         expect(selection).toEqual({ provider: 'deepseek-official', model: 'deepseek-v4-flash' })
-        expect(ceiling).toBe(8192)
+        expect(ceiling).toBe(16384)
         return 2048
       },
     ).run(input, 1)
@@ -474,9 +474,9 @@ describe('SessionConsolidationWorker', () => {
     expect(resolveConsolidationWorkerConfig({})).toMatchObject({
       provider: 'deepseek-official',
       model: 'deepseek-v4-flash',
-      maxTokens: 8192,
+      maxTokens: 16384,
       timeoutMs: 120000,
-      maxInputBytes: 131072,
+      maxInputBytes: 262144,
     })
     expect(() => resolveConsolidationWorkerConfig({ provider: ' ' })).toThrow(/provider/)
     expect(() => resolveConsolidationWorkerConfig({ maxTokens: 0 })).toThrow(/maxTokens/)

@@ -4,6 +4,8 @@ import { parseConsolidationProposal, type ConsolidationDedupeMode, type Consolid
 import { parseCandidateEntry, type ConsolidationCandidateEntry } from './consolidation-candidates.ts'
 import type { ConsolidationReceipt } from './consolidation-receipt.ts'
 import { CONSOLIDATION_PROPOSAL_TOOL } from './consolidation-worker.ts'
+import { mergeSegmentProposals } from './consolidation-chunking.ts'
+import { workerSessionIdOf } from './consolidation-identity.ts'
 import type { MemorySessionPersistence } from './host-contracts.ts'
 import { globalMemoryViewOf, workspaceMemoryViewOf, type WorkspaceMemory, type WorkspaceMemoryView } from './memory-store.ts'
 import type { SessionConsolidationInput, SessionConsolidator } from './session-consolidator.ts'
@@ -49,7 +51,53 @@ export class WorkerSessionPlanReplay implements ConsolidationPlanReplay {
     signal?.throwIfAborted()
     const evidence = replayEvidence(inspection.events)
     assertEvidenceMatchesInput(evidence, input)
-    return this.consolidator.planProposal(input, replayProposal(inspection.events))
+    const merged = await this.replayMergedProposal(workerSessionId, evidence, inspection.events, signal)
+    return this.consolidator.planProposal(input, merged)
+  }
+
+  /**
+   * Rebuild the merged proposal of a segmented run. The stored Session only
+   * carries one slice, but its rendered evidence records `evidenceSegment.count`,
+   * so the remaining slices are read by deterministic id and merged the same way
+   * the live run merged them.
+   */
+  private async replayMergedProposal(
+    workerSessionId: string,
+    evidence: Record<string, unknown>,
+    events: readonly unknown[],
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const own = replayProposal(events)
+    const segment = eventRecord(evidence.evidenceSegment)
+    const count = typeof segment?.count === 'number' && Number.isSafeInteger(segment.count)
+      ? segment.count
+      : 1
+    const index = typeof segment?.index === 'number' && Number.isSafeInteger(segment.index)
+      ? segment.index
+      : 0
+    if (count <= 1) return own
+
+    // The receipt stores the id of the last segment run; derive the review id
+    // and attempt from it so every sibling id can be reconstructed.
+    const match = /^session-memory-review-([a-f0-9]{64})-attempt-(\d+)(?:-seg-(\d+))?$/u.exec(workerSessionId)
+    if (match === null) {
+      throw new ConsolidationReplayError('segmented worker Session id is not recognized')
+    }
+    const reviewId = `review-${match[1]}`
+    const attempt = Number(match[2])
+
+    const proposals: unknown[] = []
+    for (let segmentIndex = 0; segmentIndex < count; segmentIndex += 1) {
+      if (segmentIndex === index) {
+        proposals.push(own)
+        continue
+      }
+      const siblingId = workerSessionIdOf(reviewId, attempt, segmentIndex)
+      const sibling = await this.persistence.inspect(siblingId, signal)
+      signal?.throwIfAborted()
+      proposals.push(replayProposal(sibling.events))
+    }
+    return mergeSegmentProposals(proposals)
   }
 
   async loadRecoveryPlan(
@@ -71,7 +119,8 @@ export class WorkerSessionPlanReplay implements ConsolidationPlanReplay {
     const pendingCandidates = Array.isArray(evidence.pendingCandidates)
       ? evidence.pendingCandidates.map(parseCandidateEntry)
       : undefined
-    return parseConsolidationProposal(replayProposal(inspection.events), {
+    const merged = await this.replayMergedProposal(workerSessionId, evidence, inspection.events, signal)
+    return parseConsolidationProposal(merged, {
       sourceEvidence: evidence.sourceEvidence as SessionConsolidationInput['source']['evidence'],
       global: globalMemoryViewOf(evidence.globalMemory as string),
       workspace: replayedWorkspace,
@@ -126,14 +175,45 @@ function replayEvidence(events: readonly unknown[]): Record<string, unknown> {
 }
 
 function assertEvidenceMatchesInput(record: Record<string, unknown>, input: SessionConsolidationInput): void {
+  // A segmented run stores only its own slice, so the evidence comparison is
+  // relaxed to "this slice is a contiguous subset in review order" whenever the
+  // stored payload declares itself part of a larger set.
+  const segment = eventRecord(record.evidenceSegment)
+  const segmented = typeof segment?.count === 'number' && segment.count > 1
+  const evidenceMatches = segmented
+    ? isEvidenceSliceOf(record.sourceEvidence, input.source.evidence)
+    : JSON.stringify(record.sourceEvidence) === JSON.stringify(input.source.evidence)
   if (record.reviewId !== input.reviewId
     || record.sourceSessionId !== input.source.sessionId
-    || JSON.stringify(record.sourceEvidence) !== JSON.stringify(input.source.evidence)
+    || !evidenceMatches
     || record.globalMemory !== input.global.content
     || JSON.stringify(record.workspaceRecords) !== JSON.stringify(input.workspace.records)
     || JSON.stringify(record.pendingCandidates ?? []) !== JSON.stringify(input.pendingCandidates ?? [])) {
     throw new ConsolidationReplayError('worker replay evidence does not match the frozen review input')
   }
+}
+
+/**
+ * True when `slice` is a contiguous run of `full` in the same order. The
+ * segments are produced by slicing the frozen evidence array, so this is exactly
+ * the guarantee a replayed slice can offer.
+ */
+function isEvidenceSliceOf(slice: unknown, full: unknown): boolean {
+  if (!Array.isArray(slice) || !Array.isArray(full)) return false
+  if (slice.length === 0) return true
+  const first = JSON.stringify(slice[0])
+  for (let start = 0; start + slice.length <= full.length; start += 1) {
+    if (JSON.stringify(full[start]) !== first) continue
+    let matches = true
+    for (let offset = 0; offset < slice.length; offset += 1) {
+      if (JSON.stringify(slice[offset]) !== JSON.stringify(full[start + offset])) {
+        matches = false
+        break
+      }
+    }
+    if (matches) return true
+  }
+  return false
 }
 
 function replayProposal(events: readonly unknown[]): unknown {

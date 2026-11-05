@@ -202,6 +202,124 @@ export function groupSessionsByWorkspace(sessions: readonly SessionSummary[]): S
   })
 }
 
+/**
+ * Disclosure caret rotation. Kept as a single CSS rule so opening a Session row
+ * never triggers a React re-render; the inline styles cannot express `[open]`.
+ */
+const DISCLOSURE_CSS = `details[data-memory-session] > summary > span[data-memory-caret] {
+  display: inline-block;
+}
+details[data-memory-session][open] > summary > span[data-memory-caret] {
+  transform: rotate(90deg);
+}
+details[data-memory-session] > summary::-webkit-details-marker {
+  display: none;
+}`
+
+/** Inject the disclosure stylesheet once per document, idempotently. */
+function useDisclosureStyles(): void {
+  useEffect(() => {
+    const id = 'dsh-memory-disclosure'
+    if (document.getElementById(id) !== null) return
+    const element = document.createElement('style')
+    element.id = id
+    element.textContent = DISCLOSURE_CSS
+    document.head.appendChild(element)
+  }, [])
+}
+
+/** Props for one Session disclosure row. */
+export interface SessionRowProps {
+  readonly session: SessionSummary
+  readonly t: MemoryTranslate
+  readonly consolidating: boolean
+  readonly busy: boolean
+  readonly result?: SessionConsolidateResponse | undefined
+  readonly onConsolidate: (sessionId: string) => void
+}
+
+/**
+ * One Session as a native disclosure.
+ *
+ * Collapsed state carries only what a user scans: title, creation time, and the
+ * eligibility/consolidated badge. The full Session id, receipt state, run
+ * result, and the consolidate action live in the body so a long list stays
+ * compact and every row keeps the same height.
+ *
+ * Using `<details>` instead of React state keeps toggling free of re-renders:
+ * the caret rotation is driven by a CSS attribute selector.
+ */
+export function SessionRow(props: SessionRowProps): React.JSX.Element {
+  const { session, t, consolidating, busy, result, onConsolidate } = props
+  const consolidated = sessionIsConsolidated(session)
+  return (
+    <details data-memory-session="" style={memorySectionStyles.sessionCard}>
+      <summary style={memorySectionStyles.sessionSummary}>
+        <div style={memorySectionStyles.sessionIdentity}>
+          <strong style={memorySectionStyles.sessionTitle}>{session.title ?? t('sessionUntitled')}</strong>
+          <small style={{ ...memorySectionStyles.sessionId, ...memorySectionStyles.muted }}>
+            {t('sessionCreatedAt', { value: formatSessionCreatedAt(session.createdAt) })}
+          </small>
+        </div>
+        <div style={memorySectionStyles.sessionBadges}>
+          {session.archived
+            ? <span style={memorySectionStyles.ineligibleBadge}>{t('sessionArchived')}</span>
+            : null}
+          <span style={consolidated
+            ? memorySectionStyles.consolidatedBadge
+            : session.eligible
+              ? memorySectionStyles.eligibleBadge
+              : memorySectionStyles.ineligibleBadge}>
+            {consolidated
+              ? t('sessionConsolidated')
+              : session.eligible
+                ? t('sessionEligible')
+                : t(sessionReasonKey(session.reason))}
+          </span>
+        </div>
+        <span aria-hidden="true" data-memory-caret="" style={memorySectionStyles.sessionCaret}>{'▸'}</span>
+      </summary>
+      <div style={memorySectionStyles.sessionBody}>
+        <small style={{ ...memorySectionStyles.sessionId, ...memorySectionStyles.muted }}>{session.sessionId}</small>
+        <span>{session.latestReceipt === null
+          ? t('sessionNoReceipt')
+          : t(session.latestReceipt.current ? 'sessionReceiptCurrent' : 'sessionReceiptOlder', {
+            state: t(sessionReceiptStateKey(session.latestReceipt.state)),
+          })}</span>
+        {result === undefined
+          ? null
+          : <>
+              <p style={memorySectionStyles.sessionResult}>{result.recovered
+                ? t('sessionConsolidationRecovered', { state: t(sessionReceiptStateKey(result.status)) })
+                : result.status === 'committed'
+                  ? t('sessionConsolidationCommitted', { count: result.changeCount })
+                  : result.status === 'no-change'
+                    ? t('sessionConsolidationNoChange')
+                    : t('sessionConsolidationResult', { state: t(sessionReceiptStateKey(result.status)) })}</p>
+              {result.debugLoggingEnabled
+                ? <code style={memorySectionStyles.debugPath}>{t('sessionDebugLog', {
+                    reviewId: result.reviewId,
+                    attempt: result.attempt,
+                  })}</code>
+                : null}
+            </>}
+        {session.eligible ? (
+          <div style={memorySectionStyles.actions}>
+            <MemoryButton
+              variant="primary"
+              style={memorySectionStyles.primaryButton}
+              disabled={busy || consolidated}
+              onClick={() => { onConsolidate(session.sessionId) }}
+            >
+              {consolidating ? t('sessionConsolidating') : t('sessionConsolidate')}
+            </MemoryButton>
+          </div>
+        ) : null}
+      </div>
+    </details>
+  )
+}
+
 /** Render status plus Global, Workspaces, and Sessions tabs. */
 export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
   const { t } = props
@@ -230,6 +348,7 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
   const workspaceDirty = workspaceChanges.length > 0
   const globalDirty = global !== undefined && draft !== global.content
   const draftIssue = workspaceDraftIssue(workspaceDrafts)
+  useDisclosureStyles()
   const sessionWorkspaceGroups = groupSessionsByWorkspace(sessions?.sessions ?? [])
   const selectedSessionWorkspace = sessionWorkspaceGroups.find(group => group.key === selectedSessionWorkspaceKey)
     ?? sessionWorkspaceGroups[0]
@@ -733,69 +852,15 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
                   </header>
                   <div style={memorySectionStyles.sessionList}>
                     {selectedSessionWorkspace.sessions.map(session => (
-                      <article key={session.sessionId} style={memorySectionStyles.sessionCard}>
-                        <header style={memorySectionStyles.recordHeading}>
-                          <div style={memorySectionStyles.sessionIdentity}>
-                            <strong style={memorySectionStyles.sessionTitle}>{session.title ?? t('sessionUntitled')}</strong>
-                            <small style={{ ...memorySectionStyles.sessionId, ...memorySectionStyles.muted }}>{session.sessionId}</small>
-                          </div>
-                          {session.archived
-                            ? <span style={memorySectionStyles.ineligibleBadge}>{t('sessionArchived')}</span>
-                            : null}
-                          <span style={sessionIsConsolidated(session)
-                            ? memorySectionStyles.consolidatedBadge
-                            : session.eligible
-                              ? memorySectionStyles.eligibleBadge
-                              : memorySectionStyles.ineligibleBadge}>
-                            {sessionIsConsolidated(session)
-                              ? t('sessionConsolidated')
-                              : session.eligible
-                                ? t('sessionEligible')
-                                : t(sessionReasonKey(session.reason))}
-                          </span>
-                        </header>
-                        <div style={memorySectionStyles.sessionMeta}>
-                          <span>{t('sessionCreatedAt', { value: formatSessionCreatedAt(session.createdAt) })}</span>
-                          <span>{session.latestReceipt === null
-                            ? t('sessionNoReceipt')
-                            : t(session.latestReceipt.current ? 'sessionReceiptCurrent' : 'sessionReceiptOlder', {
-                              state: t(sessionReceiptStateKey(session.latestReceipt.state)),
-                            })}</span>
-                        </div>
-                        {consolidationResult?.sessionId === session.sessionId
-                          ? <>
-                              <p style={memorySectionStyles.sessionResult}>{consolidationResult.result.recovered
-                                ? t('sessionConsolidationRecovered', {
-                                  state: t(sessionReceiptStateKey(consolidationResult.result.status)),
-                                })
-                                : consolidationResult.result.status === 'committed'
-                                  ? t('sessionConsolidationCommitted', { count: consolidationResult.result.changeCount })
-                                  : consolidationResult.result.status === 'no-change'
-                                    ? t('sessionConsolidationNoChange')
-                                    : t('sessionConsolidationResult', {
-                                      state: t(sessionReceiptStateKey(consolidationResult.result.status)),
-                                    })}</p>
-                              {consolidationResult.result.debugLoggingEnabled
-                                ? <code style={memorySectionStyles.debugPath}>{t('sessionDebugLog', {
-                                    reviewId: consolidationResult.result.reviewId,
-                                    attempt: consolidationResult.result.attempt,
-                                  })}</code>
-                                : null}
-                            </>
-                          : null}
-                        {session.eligible ? (
-                          <div style={memorySectionStyles.actions}>
-                            <MemoryButton
-                              variant="primary"
-                              style={memorySectionStyles.primaryButton}
-                              disabled={consolidatingSessionId !== undefined || sessionIsConsolidated(session)}
-                              onClick={() => { void consolidateSession(session.sessionId) }}
-                            >
-                              {consolidatingSessionId === session.sessionId ? t('sessionConsolidating') : t('sessionConsolidate')}
-                            </MemoryButton>
-                          </div>
-                        ) : null}
-                      </article>
+                      <SessionRow
+                        key={session.sessionId}
+                        session={session}
+                        t={t}
+                        consolidating={consolidatingSessionId === session.sessionId}
+                        busy={consolidatingSessionId !== undefined}
+                        result={consolidationResult?.sessionId === session.sessionId ? consolidationResult.result : undefined}
+                        onConsolidate={sid => { void consolidateSession(sid) }}
+                      />
                     ))}
                   </div>
                 </>
@@ -916,7 +981,11 @@ export const memorySectionStyles: Record<string, React.CSSProperties> = {
   error: { margin: 0, padding: 12, borderRadius: 8, background: 'rgba(200,40,40,0.15)', color: '#d44', overflowWrap: 'anywhere' },
   sessionPanel: { display: 'grid', gap: 14, width: '100%', maxWidth: '100%', minWidth: 0 },
   sessionList: { display: 'grid', gap: 10, minWidth: 0 },
-  sessionCard: { display: 'grid', gap: 10, padding: 14, minWidth: 0, border: '1px solid rgba(127,127,127,0.3)', borderRadius: 10 },
+  sessionCard: { minWidth: 0, border: '1px solid rgba(127,127,127,0.3)', borderRadius: 10 },
+  sessionSummary: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: 14, minWidth: 0, cursor: 'pointer', listStyle: 'none' },
+  sessionCaret: { flex: '0 0 auto', width: 18, textAlign: 'center', opacity: 0.55, fontSize: 12, transition: 'transform 140ms ease' },
+  sessionBadges: { display: 'flex', flexWrap: 'wrap', gap: 6, minWidth: 0 },
+  sessionBody: { display: 'grid', gap: 10, padding: '0 14px 14px', minWidth: 0 },
   sessionIdentity: { display: 'grid', gap: 3, minWidth: 0 },
   sessionTitle: { minWidth: 0, overflowWrap: 'anywhere' },
   sessionId: { minWidth: 0, overflowWrap: 'anywhere' },

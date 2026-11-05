@@ -160,6 +160,32 @@ describe('SessionConsolidationRunner', () => {
       .toMatchObject([{ name: 'verification-rule' }])
   })
 
+  it('accepts the last segment id of a segmented worker run', async () => {
+    const { runner, worker, consolidator } = await setup()
+    // A segmented worker reports its LAST segment, which carries a -seg-N suffix.
+    worker.setBehavior(async (input, attempt) => ({
+      workerSessionId: workerSessionIdOf(input.reviewId, attempt, 3),
+      plan: consolidator.planProposal(input, validProposal()),
+    }))
+    const result = await runner.run('source-session')
+    expect(result).toMatchObject({ outcome: 'committed', recovered: false })
+    // The receipt stores the LAST segment id: only that Session records the
+    // final segment count, which recovery needs to read every slice.
+    const stored = result.receipt.attempts.at(-1)!.workerSessionId!
+    expect(stored).toMatch(/-attempt-1-seg-3$/u)
+  })
+
+  it('rejects a worker Session id that belongs to another review', async () => {
+    const { runner, worker, consolidator } = await setup()
+    worker.setBehavior(async (input, attempt) => ({
+      workerSessionId: workerSessionIdOf(`review-${'b'.repeat(64)}`, attempt),
+      plan: consolidator.planProposal(input, validProposal()),
+    }))
+    const result = await runner.run('source-session')
+    // A foreign id is a hard failure; SessionConsolidationRunError maps to internal-error.
+    expect(result.outcome).toBe('internal-error')
+  })
+
   it('records a strictly empty Session as no-change without creating a worker', async () => {
     const { runner, worker } = await setup([])
     const result = await runner.run('source-session')

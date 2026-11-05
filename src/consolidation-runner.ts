@@ -112,7 +112,10 @@ export class SessionConsolidationRunner {
       }
       try {
         const produced = await this.worker.run(input, attempt, signal)
-        if (produced.workerSessionId !== workerSessionId) {
+        // A segmented run reports the id of its LAST segment, so the guard can
+        // no longer demand segment 0 verbatim: it must still prove the id belongs
+        // to this review and this attempt, which rules out a cross-review mixup.
+        if (!isWorkerSessionOf(produced.workerSessionId, workerSessionId)) {
           throw new SessionConsolidationRunError('worker-mismatch', 'worker returned an unexpected Session id')
         }
         if (produced.plan.staleChanges !== undefined) {
@@ -123,7 +126,10 @@ export class SessionConsolidationRunner {
             input,
             plan: produced.plan,
             attempt,
-            workerSessionId,
+            // Store the segment the worker finished with, not segment 0: an
+            // oversized segment is split again mid-run, so only the last
+            // Session records the final segment count that recovery needs.
+            workerSessionId: produced.workerSessionId,
             workerConfig,
             ...(signal === undefined ? {} : { signal }),
           })
@@ -230,6 +236,20 @@ export class SessionConsolidationRunError extends Error {
     super(message)
     this.name = 'SessionConsolidationRunError'
   }
+}
+
+/**
+ * True when `produced` is the segment-0 worker Session id of this
+ * review/attempt or one of its `-seg-N` siblings. Segment ids are derived from
+ * the same review id, so prefix equality with a segment suffix is the exact
+ * contract; anything else is a real mismatch.
+ */
+function isWorkerSessionOf(produced: string, base: string): boolean {
+  if (produced === base) return true
+  const prefix = `${base}-seg-`
+  if (!produced.startsWith(prefix)) return false
+  const suffix = produced.slice(prefix.length)
+  return /^[1-9][0-9]*$/u.test(suffix)
 }
 
 function nextAttempt(receipt: ConsolidationReceipt | undefined): number {

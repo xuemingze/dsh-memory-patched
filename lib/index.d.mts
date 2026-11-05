@@ -320,6 +320,56 @@ interface ConsolidationEvidenceTurn {
   readonly tools: readonly ConsolidationEvidenceTool[];
 }
 //#endregion
+//#region src/consolidation-candidates.d.ts
+/** Why the worker parked a change instead of committing it. */
+declare const CANDIDATE_REASONS: readonly ["uncertain", "thin", "unverified", "transient"];
+type ConsolidationCandidateReason = (typeof CANDIDATE_REASONS)[number];
+/** One parked change with the audit facts needed to adjudicate it later. */
+interface ConsolidationCandidateEntry {
+  readonly id: string;
+  readonly workspaceKey: string;
+  readonly change: {
+    readonly action: 'put';
+    readonly record: WorkspaceMemory;
+    readonly evidence: readonly ConsolidationEvidenceRange[];
+  } | {
+    readonly action: 'delete';
+    readonly name: string;
+    readonly evidence: readonly ConsolidationEvidenceRange[];
+  };
+  readonly reason: ConsolidationCandidateReason;
+  readonly evidenceExcerpt: string;
+  readonly lastEvidenceTime: number;
+  readonly origin: {
+    readonly reviewId: string;
+    readonly sourceSessionId: string;
+  };
+  readonly proposedAt: string;
+}
+/**
+ * JSONL pool under `<memory root>/candidates/<workspaceKey>.jsonl`. One file
+ * per Workspace, one in-process lock per file, atomic tmp+rename writes. A
+ * corrupt or hand-edited file degrades to an empty pool with a warning, the
+ * same contract the settings and receipt stores already follow.
+ */
+declare class ConsolidationCandidatePool {
+  readonly directory: string;
+  private readonly locks;
+  constructor(directory: string);
+  /** All parked entries for one Workspace, oldest first. */
+  list(workspaceKey: string): ConsolidationCandidateEntry[];
+  /** The bounded window one worker run is asked to adjudicate, oldest first. */
+  listForInput(workspaceKey: string): ConsolidationCandidateEntry[];
+  /** Append entries idempotently by id; overflow drops the oldest. */
+  park(workspaceKey: string, entries: readonly ConsolidationCandidateEntry[]): void;
+  /** Drop adjudicated ids; unknown ids are tolerated so recovery stays idempotent. */
+  remove(workspaceKey: string, ids: readonly string[]): void;
+  private read;
+  private write;
+  private pathFor;
+  private withLock;
+}
+//#endregion
 //#region src/consolidation-proposal.d.ts
 /** Inclusive source Session evidence interval. */
 interface ConsolidationEvidenceRange {
@@ -372,6 +422,29 @@ interface StaleConsolidationChange {
   readonly index: number;
   readonly reason: 'stale-evidence';
 }
+type ConsolidationWriteGateMode = 'off' | 'on';
+type ConsolidationCandidateEvent = {
+  readonly kind: 'parked';
+  readonly id: string;
+  readonly name: string;
+  readonly reason: ConsolidationCandidateReason;
+} | {
+  readonly kind: 'admitted';
+  readonly id: string;
+  readonly name: string;
+} | {
+  readonly kind: 'blocked';
+  readonly id: string;
+  readonly reason?: string;
+} | {
+  readonly kind: 'candidate-stale';
+  readonly id: string;
+  readonly name: string;
+} | {
+  readonly kind: 'candidate-shadowed';
+  readonly id: string;
+  readonly name: string;
+};
 /** Canonical proposal plus the exact Workspace generation it would produce. */
 interface ConsolidationProposalPlan {
   readonly proposal: ConsolidationProposal;
@@ -380,6 +453,8 @@ interface ConsolidationProposalPlan {
   readonly preview: WorkspaceMemoryPreview;
   readonly dedupe?: readonly ConsolidationDedupeEvent[];
   readonly staleChanges?: readonly StaleConsolidationChange[];
+  readonly parked?: readonly ConsolidationCandidateEntry[];
+  readonly candidateEvents?: readonly ConsolidationCandidateEvent[];
 }
 //#endregion
 //#region src/consolidation-debug.d.ts
@@ -421,6 +496,7 @@ interface ConsolidationSettingsView {
   readonly selection: ConsolidationModelSelection;
   readonly debugEnabled: boolean;
   readonly dedupe: ConsolidationDedupeMode;
+  readonly writeGate: ConsolidationWriteGateMode;
   readonly revision: MemoryRevision;
 }
 /** Plugin-owned settings file; memory Markdown remains the only authoritative memory data. */
@@ -435,6 +511,7 @@ declare class ConsolidationSettingsStore {
     selection: ConsolidationModelSelection;
     debugEnabled: boolean;
     dedupe?: ConsolidationDedupeMode;
+    writeGate?: ConsolidationWriteGateMode;
   }): {
     status: 'committed';
     revision: MemoryRevision;
@@ -599,7 +676,7 @@ declare module '@deepseek-ai/cordis' {
 //#endregion
 //#region src/session-consolidator.d.ts
 /** Versioned semantics included in every deterministic review identity. */
-declare const CONSOLIDATOR_VERSION = "m3-multistep-global-v6";
+declare const CONSOLIDATOR_VERSION = "m3-multistep-global-v7";
 type SessionConsolidationErrorCode = 'not-found' | 'ambiguous' | 'live' | 'archived' | 'subagent' | 'missing-cwd' | 'workspace-unavailable' | 'unstable' | 'inspection-mismatch';
 /** Closed preparation failure vocabulary used by Host orchestration and receipts. */
 declare class SessionConsolidationError extends Error {
@@ -627,6 +704,7 @@ interface SessionConsolidationInput {
     readonly index: string;
     readonly records: readonly WorkspaceMemory[];
   };
+  readonly pendingCandidates?: readonly ConsolidationCandidateEntry[];
 }
 /** Prepares a replayable consolidation input without invoking a model or mutating memory. */
 declare class SessionConsolidator {
@@ -636,7 +714,9 @@ declare class SessionConsolidator {
   private readonly version;
   private readonly excludeCwd;
   private readonly dedupeMode;
-  constructor(store: MarkdownMemoryStore, persistence: MemorySessionPersistence, agents: MemoryAgentRegistry, version?: string, excludeCwd?: (cwd: string) => boolean, dedupeMode?: () => ConsolidationDedupeMode);
+  private readonly writeGateMode;
+  private readonly candidatePool?;
+  constructor(store: MarkdownMemoryStore, persistence: MemorySessionPersistence, agents: MemoryAgentRegistry, version?: string, excludeCwd?: (cwd: string) => boolean, dedupeMode?: () => ConsolidationDedupeMode, writeGateMode?: () => ConsolidationWriteGateMode, candidatePool?: ConsolidationCandidatePool | undefined);
   /** Observe, inspect, and re-observe one Session before exposing its complete logical events. */
   prepare(sessionId: string, signal?: AbortSignal): Promise<SessionConsolidationInput>;
   /** Validate one untrusted worker result against its frozen source and target generations. */
@@ -842,8 +922,16 @@ declare class WorkerSessionPlanReplay implements ConsolidationPlanReplay {
   private readonly persistence;
   private readonly consolidator;
   private readonly dedupeMode;
-  constructor(persistence: MemorySessionPersistence, consolidator: SessionConsolidator, dedupeMode?: () => ConsolidationDedupeMode);
+  private readonly writeGateMode;
+  constructor(persistence: MemorySessionPersistence, consolidator: SessionConsolidator, dedupeMode?: () => ConsolidationDedupeMode, writeGateMode?: () => ConsolidationWriteGateMode);
   loadPlan(workerSessionId: string, input: SessionConsolidationInput, signal?: AbortSignal): Promise<ConsolidationProposalPlan>;
+  /**
+   * Rebuild the merged proposal of a segmented run. The stored Session only
+   * carries one slice, but its rendered evidence records `evidenceSegment.count`,
+   * so the remaining slices are read by deterministic id and merged the same way
+   * the live run merged them.
+   */
+  private replayMergedProposal;
   loadRecoveryPlan(workerSessionId: string, receipt: ConsolidationReceipt, workspace: WorkspaceMemoryView, signal?: AbortSignal): Promise<ConsolidationProposalPlan>;
 }
 //#endregion
@@ -867,9 +955,11 @@ declare class SessionConsolidationRunner {
   private readonly replay;
   private readonly memory;
   private readonly debug?;
-  constructor(consolidator: SessionConsolidator, worker: ConsolidationWorkerDriver, receipts: ConsolidationReceiptStore, commits: ConsolidationCommitCoordinator, replay: ConsolidationPlanReplay, memory: MarkdownMemoryStore, debug?: ConsolidationDebugStore | undefined);
+  private readonly candidatePool?;
+  constructor(consolidator: SessionConsolidator, worker: ConsolidationWorkerDriver, receipts: ConsolidationReceiptStore, commits: ConsolidationCommitCoordinator, replay: ConsolidationPlanReplay, memory: MarkdownMemoryStore, debug?: ConsolidationDebugStore | undefined, candidatePool?: ConsolidationCandidatePool | undefined);
   run(sessionId: string, signal?: AbortSignal): Promise<ConsolidationRunResult>;
   private recoverPending;
+  private settleCandidates;
 }
 type SessionConsolidationRunErrorCode = 'pending-recovery' | 'worker-mismatch' | 'commit-failed';
 declare class SessionConsolidationRunError extends Error {

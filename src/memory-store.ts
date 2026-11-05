@@ -508,9 +508,8 @@ function warnUnreadableRecord(path: string, error: unknown): void {
  * node_modules: profile-installed copies sit at
  * `<dsh-home>/profiles/<name>/node_modules/<pkg>/lib/index.mjs`, so walking up
  * to the `node_modules` ancestor yields the profile directory that owns the
- * durable library. Desktop hosts never set process-level `DSH_HOME` (it is
- * only injected into shell tool overlays), so this anchor is the only reliable
- * way to find the profile library without guessing from HOME.
+ * durable library. Desktop hosts normally do not set process-level `DSH_HOME`,
+ * but external launchers can, so this anchor is checked before it.
  */
 export function profileAdjacentMemoryRoot(moduleUrl: string): string | undefined {
   if (!moduleUrl.startsWith('file:')) return undefined
@@ -528,13 +527,15 @@ export function profileAdjacentMemoryRoot(moduleUrl: string): string | undefined
 
 /** Resolve the durable memory root for this installation. */
 export function defaultMemoryRoot(): string {
-  const configured = process.env.DSH_HOME?.trim()
-  if (configured !== undefined && configured !== '') return join(resolve(configured), 'memory')
-  // A profile-adjacent library (this fork is always installed into a profile)
-  // outranks any home-based guess: HOME/USERPROFILE may point at a bare
-  // `.dsh` that a mis-resolved boot created earlier.
+  // The profile anchor outranks DSH_HOME. A profile-installed bundle must always
+  // use the library that lives next to it: launchers (external process managers,
+  // wrappers) may export a process-level DSH_HOME that points at a bare `.dsh`,
+  // and honouring it there silently swaps in an empty store. DSH_HOME still wins
+  // whenever this bundle is not profile-installed (CLI/web checkouts).
   const adjacent = profileAdjacentMemoryRoot(import.meta.url)
   if (adjacent !== undefined) return adjacent
+  const configured = process.env.DSH_HOME?.trim()
+  if (configured !== undefined && configured !== '') return join(resolve(configured), 'memory')
   // Only trust a fallback home whose `.dsh` actually exists: a bare HOME
   // (MSYS-style or set by a wrapper) must not shadow the real Windows profile
   // library, otherwise every Session boots against a fresh empty store.
