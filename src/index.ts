@@ -12,6 +12,8 @@ import {
   type WorkspaceMemoryType,
 } from './memory-store.ts'
 import { MemoryObservationRegistry } from './memory-observation.ts'
+import { MemoryGovernanceRegistry } from './memory-governance-registry.ts'
+import { MemoryGovernanceStore } from './memory-governance-store.ts'
 import type { MemoryToolExecution } from './host-contracts.ts'
 import { SessionCatalog } from './session-catalog.ts'
 import { adaptSessionPersistence } from './session-persistence-adapter.ts'
@@ -117,6 +119,11 @@ export function apply(ctx: Context, config: Config = {}): void {
   const store = new MarkdownMemoryStore(ctx)
   store.initialize()
   const observations = new MemoryObservationRegistry(store)
+  // Optional seam for other plugins: verification and usage signals arrive here.
+  // With no provider it stays empty and every caller degrades to "unverified",
+  // so dsh-memory keeps working with nothing else installed.
+  const governance = new MemoryGovernanceRegistry()
+  const governanceStore = new MemoryGovernanceStore(store.root)
   const receipts = new ConsolidationReceiptStore(join(store.root, 'reviews'))
   const consolidationSettings = new ConsolidationSettingsStore(store.root, workerConfig)
   const candidatePool = new ConsolidationCandidatePool(join(store.root, 'candidates'))
@@ -281,6 +288,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         () => llmCatalog,
         () => sessionWorker,
         consolidationSettings,
+        governance,
         endpoint,
         payload,
         signal,
@@ -399,6 +407,7 @@ async function handleMemoryRpc(
   getLlmCatalog: () => MemoryLlmCatalog | undefined,
   getSessionWorker: () => SessionConsolidationWorker | undefined,
   consolidationSettings: ConsolidationSettingsStore,
+  governance: MemoryGovernanceRegistry,
   endpoint: string,
   payload: unknown,
   signal: AbortSignal,
@@ -490,6 +499,17 @@ async function handleMemoryRpc(
           await readConsolidationModelCatalog(llm, consolidationSettings),
         ) }
       }
+      case 'governance/status':
+        parseEmptyPayload(payload)
+        // Read-only introspection: which optional providers are attached, and
+        // whether a scope's sidecar had to degrade. Never exposes provider
+        // payloads or claim text.
+        return {
+          ok: true,
+          value: {
+            verificationProviders: governance.verificationProviderIds(),
+          },
+        }
       case 'models/select': {
         const input = parseConsolidationModelSelectPayload(payload)
         const current = consolidationSettings.read()
