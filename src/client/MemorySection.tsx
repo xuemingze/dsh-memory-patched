@@ -668,6 +668,7 @@ export function MemorySection(props: MemorySectionInjected): React.JSX.Element {
     const signal = controller.signal
     if (next === 'workspaces' && workspaces.length === 0) void refreshWorkspaces(signal)
     if (next === 'sessions' && sessions === undefined) void refreshSessions(signal)
+    if (next === 'forgetting' && forgetting === undefined) void refreshForgetting(signal)
     if (next === 'settings' && modelCatalog === undefined) void refreshModels(signal)
   }
 
