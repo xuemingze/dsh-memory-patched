@@ -182,11 +182,56 @@ pnpm run check
 
 提交代码前运行 `pnpm run check`。不同改动对应的人工验证方式见 [docs/development.md](docs/development.md)。贡献流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
+## 记忆治理
+
+记忆不只是"存/取"两件事。一条记录会变旧、会被新事实取代、会和另一条记录矛盾、
+会重要到不能忘、也会因为一次网络抖动被误判成坏的。这一层就是管这些状态。
+
+### 职责边界
+
+**dsh-memory 只负责**：记忆现在是什么状态、哪些提案能安全进入、如何可逆地遗忘。
+
+**它不负责**：证明外部世界的事实。网络通不通、代理稳不稳、模型可用性、
+插件安装状态——这些由外部模块判断。dsh-memory 只消费有来源、有时间、
+有环境指纹的 observation，绝不自己去探测。
+
+这个边界不是吝啬。一个试图自己诊断网络的记忆系统，会用一次瞬时故障当作
+关于记录真伪的证据，进而把一条好记忆降级——而没人能复现那次判断。
+
+### 协同大于全面
+
+组装式系统的目标不是一个插件全做，而是每个模块契约窄、失败隔离、随时可换。
+dsh-memory 因此暴露两个可选扩展点：
+
+- **verification provider**：给出"这条记录是否仍然成立"的观察；
+- **trigger provider**：决定"什么时候该跑一轮治理"。
+
+两者都可以不装。不装时功能降级为手动，而不是报错。契约见
+[治理 provider 契约](docs/governance-providers.md)。
+
+### 遗忘是可逆的生命周期
+
+`active → cooled → archived` 只是记录在提示词里是否出现，**Markdown 永远不动**。
+
+**没有任何路径产出删除。** 物理删除必须是另一件你明确开口要求的事。
+
+### Dream 不是后台改写器
+
+Dream 只看已存在的记录，提议如何整理它们：合并、取代、标记存疑、调整优先级。
+
+默认 `shadow`：能算、能显示，**不改任何东西**。内容变更在任何模式下都需要你
+逐个动作勾选批准。没有删除，没有自动应用，没有定时器。
+
+契约见 [Dream](docs/dream.md)。
+
 ## 文档
 
 - [架构](docs/architecture.md)：已实现组件和 Host/Browser 请求流；
 - [设计](docs/design.md)：稳定产品规则与第一版边界；
 - [Session 整理设计](docs/session-consolidation.md)：完整流程、状态机和数据契约；
+- [Dream 契约](docs/dream.md)：跨记录提案的动作词表、审批流程与写入边界；
+- [治理 provider 契约](docs/governance-providers.md)：外部模块如何供给观察，以及
+  `intermittent` 与 `hard-conflict` 的区别；
 - [路线图](docs/roadmap.md)：已完成里程碑与后续方向；
 - [开发指南](docs/development.md)：命令、验证矩阵和发布步骤；
 - [LoCoMo-10 评测](benchmark/locomo/README.md)：隔离运行、Judge、Score 与成本统计；

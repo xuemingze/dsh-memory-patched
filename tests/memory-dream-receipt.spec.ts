@@ -629,3 +629,37 @@ describe('Promotion reaches GLOBAL.md', () => {
     )).rejects.toThrow(/does not exist/u)
   })
 })
+describe('Sensitive data boundary', () => {
+  it('keeps the sidecar text to the summary the claim already held', async () => {
+    // Records seeded from Markdown carry a short description, not the body.
+    // If Dream ever wrote a body here it would duplicate memory into the sidecar.
+    const store = seed()
+    const plan = parseDreamProposal({ actions: [{ action: 'cool', target: 'alpha' }] }, context())
+    applyDreamPlan(store, plan, NOW)
+    const alpha = store.read('scope-a').claims.find(entry => entry.name === 'alpha')!
+    expect(alpha.text).toBe('alpha summary')
+    expect(alpha.text.length).toBeLessThan(500)
+  })
+
+  it('writes no absolute path or credential into a receipt', () => {
+    const receipts = new DreamReceiptStore(root)
+    receipts.write({
+      runId: 'audit-1',
+      scopeKey: 'scope-a',
+      state: 'committed',
+      attempt: 1,
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-flash',
+      beforeRevision: 'gov1:0000000000000000',
+      afterRevision: 'gov1:1111111111111111',
+      proposalHash: 'h',
+      risk: 'metadata-only',
+      changes: [{ action: 'cool', target: 'alpha' }],
+      createdAt: new Date(NOW).toISOString(),
+    })
+    const raw = readFileSync(join(root, 'dream', 'audit-1.json'), 'utf8')
+    expect(raw).not.toMatch(/[A-Za-z]:\\\\Users/iu)
+    expect(raw).not.toMatch(/sk-[A-Za-z0-9]{16,}/u)
+    expect(raw).not.toMatch(/Bearer\s/u)
+  })
+})

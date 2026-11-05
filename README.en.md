@@ -182,11 +182,66 @@ pnpm run check
 
 Run `pnpm run check` before submitting code. See [docs/development.md](docs/development.md) for the verification matrix and manual checks, and [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow.
 
+## Memory governance
+
+Memory is not just store-and-retrieve. A record grows stale, gets replaced by a
+newer fact, contradicts another record, becomes too important to forget, or gets
+misjudged as broken because the network flaked once. This layer manages those
+states.
+
+### Scope
+
+**dsh-memory owns**: what state a memory is in, which proposals may safely enter,
+and how forgetting works reversibly.
+
+**It does not own**: proving facts about the outside world. Whether the network,
+a proxy, a model, or a plugin is healthy belongs to external modules. dsh-memory
+consumes observations that carry a source, a time, and an environment
+fingerprint. It never probes.
+
+The boundary is not stinginess. A memory system that diagnosed its own network
+would treat a transient outage as evidence about a record's truth and demote a
+good memory — and nobody could reproduce the judgement.
+
+### Collaboration over completeness
+
+An assembled system does not aim for one plugin doing everything; every module
+keeps a narrow contract, fails in isolation, and can be replaced. dsh-memory
+therefore exposes two optional extension points:
+
+- a **verification provider** reports whether a record still holds;
+- a **trigger provider** decides when a governance pass should run.
+
+Neither is required. Without them the feature degrades to manual operation rather
+than failing. See the [governance provider contract](docs/governance-providers.md).
+
+### Forgetting is a reversible lifecycle
+
+`active → cooled → archived` only changes whether a record appears in the prompt.
+**The Markdown is never touched.**
+
+**No code path produces a deletion.** Physical removal is a separate act you have
+to ask for in so many words.
+
+### Dream is not a background rewriter
+
+Dream reads the records that already exist and proposes how to organise them:
+merge, supersede, mark contested, adjust priority.
+
+The default is `shadow`: it may compute and display, and **writes nothing**.
+Content changes need you to tick each action, in every mode. No deletion, no
+automatic application, no timer.
+
+See the [Dream contract](docs/dream.md).
+
 ## Documentation
 
 - [Architecture](docs/architecture.md): implemented components and Host/Browser request flows;
 - [Design](docs/design.md): stable product rules and v0.1 boundaries;
 - [Session consolidation](docs/session-consolidation.md): full flow, state machine, and data contracts;
+- [Dream contract](docs/dream.md): the action vocabulary, approval flow, and write boundaries;
+- [Governance provider contract](docs/governance-providers.md): how external modules supply
+  observations, and how `intermittent` differs from `hard-conflict`;
 - [Roadmap](docs/roadmap.md): completed milestones and future directions;
 - [Development](docs/development.md): commands, verification matrix, and release procedure;
 - [LoCoMo-10 benchmark](benchmark/locomo/README.md): isolated runs, Judge, Score, and cost reporting;
