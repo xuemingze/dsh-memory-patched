@@ -177,6 +177,18 @@ describe('Driving a Dream run through an agent', () => {
     expect(seen.registered).toEqual([DREAM_PROPOSAL_TOOL])
   })
 
+  it('sends messages with a producer-owned source kind', async () => {
+    // The host's v4 session admission rejects a bare { role, content } object,
+    // and the failure surfaces only at persistence — the worker's session is
+    // empty and the receipt says provider-failed. That exact bug cost this
+    // machine a day on 2026-10-21.
+    const { agents, seen } = makeAgents([{ actions: [] }])
+    await runDreamWithAgent({ ...base, agents, validate: () => ({ accepted: true, message: 'ok' }) })
+    const sent = seen.injected[0] as { source?: { kind?: string } }
+    expect(sent.source?.kind).toBe('plugin:dsh-memory')
+    expect(sent.source?.kind).not.toBe('plugin')
+  })
+
   it('injects the rendered prompt as the first message', async () => {
     const { agents, seen } = makeAgents([{ actions: [] }])
     await runDreamWithAgent({ ...base, agents, validate: () => ({ accepted: true, message: 'ok' }) })

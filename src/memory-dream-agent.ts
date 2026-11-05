@@ -7,6 +7,7 @@
  * one, register the proposal tool, inject the input, wait for idle.
  */
 
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { DreamProposalContext } from './memory-dream-proposal.ts'
 import { DREAM_WORKER_RULES } from './memory-dream-worker.ts'
 
@@ -200,8 +201,18 @@ export async function runDreamWithAgent(options: DreamAgentRunOptions): Promise<
   })
 
   try {
-    handle.agent.inject({ role: 'user', content: prompt })
-    handle.agent.followup({ role: 'user', content: 'Submit the plan now by calling the tool.' })
+    // The host's v4 session admission only accepts a producer-owned source kind.
+    // A bare { role, content } object is rejected at persistence, which is how
+    // the consolidation worker failed before 2026-10-21: the session stayed
+    // empty and the receipt said provider-failed.
+    handle.agent.inject(createUserMessage({
+      content: [{ type: 'text', text: prompt }],
+      source: { kind: 'plugin:dsh-memory' },
+    }))
+    handle.agent.followup(createUserMessage({
+      content: [{ type: 'text', text: 'Submit the plan now by calling the tool.' }],
+      source: { kind: 'plugin:dsh-memory' },
+    }))
     await handle.agent.whenIdle()
   } catch (cause: unknown) {
     if (agentError !== undefined) {
