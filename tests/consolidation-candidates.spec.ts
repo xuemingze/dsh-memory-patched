@@ -79,9 +79,12 @@ describe('ConsolidationCandidatePool', () => {
   it('caps the pool at the configured size, dropping the oldest', () => {
     const { store } = pool()
     const key = 'workspace-0123456789abcdef'
-    for (let index = 0; index < MAX_CANDIDATE_POOL + 5; index++) {
-      store.park(key, [entry({ id: `cand-01234567-${index}` })])
-    }
+    // One park call rather than a loop: park rewrites the whole file, so parking
+    // 205 times is quadratic and took ~4s, close enough to the runner's timeout
+    // that it failed intermittently under parallel load. The overflow rule is
+    // what is under test, not the cost of repeated writes.
+    store.park(key, Array.from({ length: MAX_CANDIDATE_POOL + 5 }, (_, index) =>
+      entry({ id: `cand-01234567-${index}` })))
     const listed = store.list(key)
     expect(listed).toHaveLength(MAX_CANDIDATE_POOL)
     expect(listed[0]!.id).toBe(`cand-01234567-5`)

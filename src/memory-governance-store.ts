@@ -148,10 +148,17 @@ function revisionOf(scopeKey: string, claims: readonly GovernanceClaim[]): strin
   return `gov1:${createHash('sha256').update(canonical).digest('hex').slice(0, 16)}`
 }
 
-/** Merge one caller input with the stored claim, keeping derived fields stable. */
+/**
+ * Merge one caller input with the stored claim.
+ *
+ * A brand-new claim keeps the score and lifecycle it was created with, and an
+ * existing claim keeps them across re-upserts so being seen again in another
+ * Session cannot silently un-cool it. An explicit lifecycle or score on the
+ * input wins, which is how the initializer and the policy publish their verdicts.
+ */
 function mergeClaim(input: GovernanceClaimInput, previous: GovernanceClaim | undefined): GovernanceClaim {
-  const score = previous?.importanceScore ?? 50
-  const lifecycle: Lifecycle = previous?.lifecycle ?? 'active'
+  const score = previous?.importanceScore ?? input.importanceScore ?? 50
+  const lifecycle: Lifecycle = input.lifecycle ?? previous?.lifecycle ?? 'active'
   return {
     name: input.name,
     scopeKey: input.scopeKey,

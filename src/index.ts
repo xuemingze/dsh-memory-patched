@@ -15,6 +15,7 @@ import { MemoryObservationRegistry } from './memory-observation.ts'
 import { MemoryGovernanceRegistry } from './memory-governance-registry.ts'
 import { MemoryGovernanceStore } from './memory-governance-store.ts'
 import { buildForgettingReport, type ForgettingRecordInput } from './memory-forgetting-report.ts'
+import { initializeGovernance, type InitializeScopeInput } from './memory-governance-init.ts'
 import type { MemoryToolExecution } from './host-contracts.ts'
 import { SessionCatalog } from './session-catalog.ts'
 import { adaptSessionPersistence } from './session-persistence-adapter.ts'
@@ -536,6 +537,27 @@ async function handleMemoryRpc(
         return { ok: true, value: parseConsolidationModelCatalogResponse(
           await readConsolidationModelCatalog(llm, consolidationSettings),
         ) }
+      }
+      case 'governance/initialize': {
+        parseEmptyPayload(payload)
+        // Seed metadata for records written before governance existed. This
+        // writes sidecar only: Markdown is never touched and existing claims are
+        // never overwritten, so it is safe to re-run.
+        const scopes: InitializeScopeInput[] = []
+        for (const workspace of store.listWorkspaces().workspaces) {
+          const view = store.readWorkspaceById(workspace.workspaceId)
+          if (view === undefined) continue
+          scopes.push({ scopeKey: workspace.workspaceId, records: view.records })
+        }
+        const summaries = initializeGovernance(governanceStore, scopes, Date.now())
+        return {
+          ok: true,
+          value: {
+            created: summaries.reduce((total, entry) => total + entry.created, 0),
+            skipped: summaries.reduce((total, entry) => total + entry.skipped, 0),
+            scopes: summaries.length,
+          },
+        }
       }
       case 'governance/forgetting': {
         parseEmptyPayload(payload)

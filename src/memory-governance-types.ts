@@ -65,6 +65,13 @@ export interface GovernanceClaimInput {
   readonly supersedes?: readonly string[]
   readonly sourcePlugins?: readonly string[]
   readonly lastEvidenceAt?: number
+  /**
+   * Explicit verdicts from a deterministic producer (the initializer, the
+   * lifecycle policy). Omitted by ordinary callers, in which case the stored
+   * values are preserved instead of being recomputed.
+   */
+  readonly importanceScore?: number
+  readonly lifecycle?: Lifecycle
 }
 
 /** One scope's governance document as stored on disk. */
