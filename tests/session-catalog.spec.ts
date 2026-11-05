@@ -58,6 +58,7 @@ describe('Session candidate catalog', () => {
 
     await expect(catalog.list()).resolves.toEqual({
       available: true,
+      suppressed: { failedZeroOutput: 0, trivialAutomation: 0, groups: [] },
       sessions: [
         { sessionId: 'eligible', title: null, createdAt: 50, workspaceId: memory.workspaceReferenceForCwd('/work/project-alpha').workspaceId, workspaceName: 'project-alpha', eligible: true, reason: null, latestReceipt: null, archived: false },
         { sessionId: 'live', title: null, createdAt: 40, workspaceId: memory.workspaceReferenceForCwd('/work/project-beta').workspaceId, workspaceName: 'project-beta', eligible: false, reason: 'live', latestReceipt: null, archived: false },

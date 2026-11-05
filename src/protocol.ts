@@ -51,8 +51,19 @@ export interface WorkspaceListResponse {
   workspaces: WorkspaceSummary[]
 }
 
-/** Deterministic reason why a persisted Session cannot be consolidated. */
-export type SessionIneligibleReason = 'live' | 'missing-cwd' | 'workspace-unavailable' | 'unstable' | 'subagent' | 'empty'
+/**
+ * Deterministic reason why a persisted Session is not offered as a candidate.
+ * `failed-zero-output` Sessions produced nothing and are hidden from the list
+ * entirely; they are reported through `SessionListResponse.suppressed`.
+ */
+export type SessionIneligibleReason =
+  | 'live'
+  | 'missing-cwd'
+  | 'workspace-unavailable'
+  | 'unstable'
+  | 'subagent'
+  | 'empty'
+  | 'failed-zero-output'
 
 export type SessionReceiptState =
   | 'committing'
@@ -90,10 +101,29 @@ export type SessionSummary = {
   | { eligible: false; reason: SessionIneligibleReason }
 )
 
+/** One suppressed cluster of Sessions that share a failure fingerprint. */
+export interface SuppressedSessionGroup {
+  readonly fingerprint: string
+  readonly title: string | null
+  readonly count: number
+  readonly firstCreatedAt: number
+  readonly lastCreatedAt: number
+  readonly reason: 'failed-zero-output' | 'trivial-automation'
+  readonly errorCode?: string
+}
+
+/** Counts and clusters for Sessions intentionally omitted from `sessions`. */
+export interface SuppressedSessionsSummary {
+  readonly failedZeroOutput: number
+  readonly trivialAutomation: number
+  readonly groups: SuppressedSessionGroup[]
+}
+
 /** Session candidate capability and ordered persisted Session list. */
 export interface SessionListResponse {
   available: boolean
   sessions: SessionSummary[]
+  suppressed: SuppressedSessionsSummary
 }
 
 export interface SessionConsolidatePayload {
@@ -349,7 +379,7 @@ export function parseWorkspaceCommitResponse(value: unknown): WorkspaceCommitRes
 /** Parse the Session candidate projection on both sides of the Host/Browser wire. */
 export function parseSessionListResponse(value: unknown): SessionListResponse {
   const record = requireRecord(value, 'session list response')
-  requireExactKeys(record, ['available', 'sessions'], 'session list response')
+  requireExactKeys(record, ['available', 'sessions', 'suppressed'], 'session list response')
   if (typeof record.available !== 'boolean') throw new TypeError('session list response.available must be a boolean')
   if (!Array.isArray(record.sessions)) throw new TypeError('session list response.sessions must be an array')
   if (!record.available && record.sessions.length !== 0) {
@@ -358,7 +388,68 @@ export function parseSessionListResponse(value: unknown): SessionListResponse {
   return {
     available: record.available,
     sessions: record.sessions.map((entry, index) => parseSessionSummary(entry, `session list response.sessions[${index}]`)),
+    suppressed: parseSuppressedSummary(record.suppressed, 'session list response.suppressed'),
   }
+}
+
+/** Parse the suppressed-Session summary carried alongside the candidate list. */
+function parseSuppressedSummary(value: unknown, label: string): SuppressedSessionsSummary {
+  const record = requireRecord(value, label)
+  requireExactKeys(record, ['failedZeroOutput', 'trivialAutomation', 'groups'], label)
+  const failedZeroOutput = nonNegativeInteger(record.failedZeroOutput, `${label}.failedZeroOutput`)
+  const trivialAutomation = nonNegativeInteger(record.trivialAutomation, `${label}.trivialAutomation`)
+  if (!Array.isArray(record.groups)) throw new TypeError(`${label}.groups must be an array`)
+  return {
+    failedZeroOutput,
+    trivialAutomation,
+    groups: record.groups.map((entry, index) => parseSuppressedGroup(entry, `${label}.groups[${index}]`)),
+  }
+}
+
+function parseSuppressedGroup(value: unknown, label: string): SuppressedSessionGroup {
+  const record = requireRecord(value, label)
+  const keys = ['count', 'fingerprint', 'firstCreatedAt', 'lastCreatedAt', 'reason', 'title']
+  const hasErrorCode = record.errorCode !== undefined
+  requireExactKeys(record, hasErrorCode ? [...keys, 'errorCode'] : keys, label)
+  if (typeof record.fingerprint !== 'string' || !/^[a-f0-9]{16}$/u.test(record.fingerprint)) {
+    throw new TypeError(`${label}.fingerprint must be 16 lowercase hex characters`)
+  }
+  if (record.title !== null && typeof record.title !== 'string') {
+    throw new TypeError(`${label}.title must be a string or null`)
+  }
+  const count = positiveInteger(record.count, `${label}.count`)
+  const firstCreatedAt = nonNegativeInteger(record.firstCreatedAt, `${label}.firstCreatedAt`)
+  const lastCreatedAt = nonNegativeInteger(record.lastCreatedAt, `${label}.lastCreatedAt`)
+  if (record.reason !== 'failed-zero-output' && record.reason !== 'trivial-automation') {
+    throw new TypeError(`${label}.reason must be a suppressed Session reason`)
+  }
+  if (hasErrorCode && typeof record.errorCode !== 'string') {
+    throw new TypeError(`${label}.errorCode must be a string when present`)
+  }
+  return {
+    fingerprint: record.fingerprint,
+    title: record.title as string | null,
+    count,
+    firstCreatedAt,
+    lastCreatedAt,
+    reason: record.reason,
+    ...(hasErrorCode ? { errorCode: record.errorCode as string } : {}),
+  }
+}
+
+/** Narrow one parsed field to a non-negative safe integer. */
+function nonNegativeInteger(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${label} must be a non-negative safe integer`)
+  }
+  return value
+}
+
+/** Narrow one parsed field to a strictly positive safe integer. */
+function positiveInteger(value: unknown, label: string): number {
+  const parsed = nonNegativeInteger(value, label)
+  if (parsed < 1) throw new TypeError(`${label} must be a positive safe integer`)
+  return parsed
 }
 
 /** Parse one terminal manual consolidation result on both sides of the wire. */
@@ -624,7 +715,7 @@ function requireWorkspaceMemoryName(value: unknown, label: string): string {
 
 function isSessionIneligibleReason(value: unknown): value is SessionIneligibleReason {
   return value === 'live' || value === 'missing-cwd' || value === 'workspace-unavailable' || value === 'unstable'
-    || value === 'subagent' || value === 'empty'
+    || value === 'subagent' || value === 'empty' || value === 'failed-zero-output'
 }
 
 function isSessionReceiptState(value: unknown): value is SessionReceiptState {

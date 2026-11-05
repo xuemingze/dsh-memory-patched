@@ -11,8 +11,14 @@ import type {
   MemorySessionSnapshot,
   MemorySessionSnapshotPersistence,
 } from './host-contracts.ts'
-import type { SessionIneligibleReason, SessionListResponse, SessionSummary } from './protocol.ts'
+import type {
+  SessionIneligibleReason,
+  SessionListResponse,
+  SessionSummary,
+  SuppressedSessionGroup,
+} from './protocol.ts'
 import { isConsolidationWorkerSessionId } from './consolidation-identity.ts'
+import { classifySessionQuality, sessionGroupFingerprint } from './session-quality.ts'
 
 /** Bounded probe fan-out: enough parallelism to hide I/O latency, few enough to stay polite. */
 const PROBE_CONCURRENCY = 6
@@ -22,6 +28,43 @@ const LIST_TTL_MS = 5_000
 
 /** Durable verdicts live beside the store so a reload skips re-probing. */
 const PROBE_CACHE_FILENAME = 'probe-cache.json'
+
+/**
+ * Probe verdict plus the facts needed to describe a suppressed cluster.
+ * `reason === undefined` means the Session looks consolidatable.
+ */
+interface ProbeOutcome {
+  readonly reason: SessionIneligibleReason | undefined
+  readonly detail?: {
+    readonly firstUserText?: string | undefined
+    readonly title?: string | null
+    readonly errorCode?: string | undefined
+  }
+}
+
+/** Adapt one persisted verdict into a probe outcome. */
+function persistedOutcome(reason: SessionIneligibleReason | undefined): ProbeOutcome | undefined {
+  return reason === undefined ? undefined : { reason }
+}
+
+/** Collapse per-Session suppression facts into one row per fingerprint. */
+function clusterSuppressed(groups: readonly SuppressedSessionGroup[]): SuppressedSessionGroup[] {
+  const merged = new Map<string, SuppressedSessionGroup>()
+  for (const group of groups) {
+    const existing = merged.get(group.fingerprint)
+    if (existing === undefined) {
+      merged.set(group.fingerprint, group)
+      continue
+    }
+    merged.set(group.fingerprint, {
+      ...existing,
+      count: existing.count + group.count,
+      firstCreatedAt: Math.min(existing.firstCreatedAt, group.firstCreatedAt),
+      lastCreatedAt: Math.max(existing.lastCreatedAt, group.lastCreatedAt),
+    })
+  }
+  return [...merged.values()].sort((left, right) => right.lastCreatedAt - left.lastCreatedAt)
+}
 
 /**
  * Persisted probe verdicts, keyed by `sessionId@revision`. `undefined` never
@@ -66,7 +109,9 @@ class ProbeVerdictStore {
     try {
       const raw = JSON.parse(readFileSync(this.path, 'utf8')) as Record<string, string>
       for (const [key, verdict] of Object.entries(raw)) {
-        if (verdict === 'subagent' || verdict === 'empty') this.entries.set(key, verdict)
+        if (verdict === 'subagent' || verdict === 'empty' || verdict === 'failed-zero-output') {
+          this.entries.set(key, verdict)
+        }
       }
     } catch {
       // Missing or unreadable file simply means "nothing persisted yet".
@@ -90,7 +135,7 @@ export class SessionCatalog {
     private readonly probeEvents?: (sessionId: string, signal?: AbortSignal) => Promise<readonly unknown[] | undefined>,
   ) {}
 
-  private readonly probeCache = new Map<string, SessionIneligibleReason | undefined>()
+  private readonly probeCache = new Map<string, ProbeOutcome>()
   private probeStore: ProbeVerdictStore | undefined
   private listCache: { at: number; response: SessionListResponse } | undefined
 
@@ -136,24 +181,26 @@ export class SessionCatalog {
         || matching[0]?.revision !== snapshot.revision) return 'unstable'
       return undefined
     }
-    const verdicts = new Map<string, SessionIneligibleReason | undefined>()
+    const verdicts = new Map<string, ProbeOutcome>()
     const toProbe: MemorySessionSnapshot[] = []
     const probeStore = this.probeVerdictStore()
     for (const snapshot of unique) {
       const key = `${snapshot.header.id}@${snapshot.revision}`
       const staticVerdict = staticReason(snapshot)
       if (staticVerdict !== undefined) {
-        verdicts.set(snapshot.header.id, staticVerdict)
+        verdicts.set(snapshot.header.id, { reason: staticVerdict })
         continue
       }
-      const cached = this.probeCache.get(key) ?? probeStore.read(key)
-      if (cached !== undefined || probeStore.known(key)) {
+      // A persisted verdict only carries the reason; cluster details are
+      // recomputed when the Session is probed again on a revision change.
+      const cached = this.probeCache.get(key) ?? persistedOutcome(probeStore.read(key))
+      if (cached !== undefined) {
         this.probeCache.set(key, cached)
         verdicts.set(snapshot.header.id, cached)
         continue
       }
       if (latestReceipts?.has(snapshot.header.id) && this.probeCache.has(key)) {
-        verdicts.set(snapshot.header.id, this.probeCache.get(key))
+        verdicts.set(snapshot.header.id, this.probeCache.get(key)!)
         continue
       }
       toProbe.push(snapshot)
@@ -164,26 +211,69 @@ export class SessionCatalog {
     // Persist the merged verdict set (fresh probes + inherited cache) so a
     // reload skips re-probing; stale keys for vanished sessions drop out.
     probeStore.write(
-      [...verdicts].map(([id, verdict]) => [`${id}@${secondById.get(id)?.[0]?.revision ?? ''}`, verdict] as const),
+      [...verdicts].map(([id, outcome]) => [
+        `${id}@${secondById.get(id)?.[0]?.revision ?? ''}`,
+        outcome.reason,
+      ] as const),
       new Set(unique.map(snapshot => `${snapshot.header.id}@${snapshot.revision}`)),
     )
-    const sessions = unique
-      .map(snapshot => this.classify(
+
+    const suppressed: SuppressedSessionGroup[] = []
+    let failedZeroOutput = 0
+    const sessions: SessionSummary[] = []
+    for (const snapshot of unique) {
+      const title = this.readTitle(snapshot)
+      const outcome = verdicts.get(snapshot.header.id) ?? { reason: headerSubagentMarker(snapshot.header) }
+      const summary = this.classify(
         snapshot,
         secondById,
         duplicateFirstIds,
         latestReceipts?.get(snapshot.header.id),
-        this.readTitle(snapshot),
-        verdicts.get(snapshot.header.id) ?? headerSubagentMarker(snapshot.header),
-      ))
-      // Empty shells are noise, not candidates: keep them out of the list entirely.
-      .filter(session => session.reason !== 'empty')
-      .sort((left, right) => right.createdAt - left.createdAt || left.sessionId.localeCompare(right.sessionId, 'en'))
+        title,
+        outcome,
+      )
+      // Empty shells and zero-output failures are noise, not candidates: they
+      // leave the list but stay auditable through the suppressed summary.
+      if (summary.reason === 'empty') continue
+      if (summary.reason === 'failed-zero-output') {
+        failedZeroOutput += 1
+        const workspace = workspaceReference(this.store, snapshot.header.cwd)
+        suppressed.push({
+          fingerprint: sessionGroupFingerprint({
+            workspaceKey: workspace?.displayName ?? '',
+            title,
+            firstUserText: outcome.detail?.firstUserText,
+            quality: 'failed-zero-output',
+            errorCode: outcome.detail?.errorCode,
+          }),
+          title: title ?? outcome.detail?.firstUserText ?? null,
+          count: 1,
+          firstCreatedAt: summary.createdAt,
+          lastCreatedAt: summary.createdAt,
+          reason: 'failed-zero-output',
+          ...(outcome.detail?.errorCode === undefined ? {} : { errorCode: outcome.detail.errorCode }),
+        })
+        continue
+      }
+      sessions.push(summary)
+    }
+    sessions.sort((left, right) => right.createdAt - left.createdAt || left.sessionId.localeCompare(right.sessionId, 'en'))
+
+    const response: SessionListResponse = {
+      available: true,
+      sessions,
+      suppressed: {
+        failedZeroOutput,
+        trivialAutomation: 0,
+        groups: clusterSuppressed(suppressed),
+      },
+    }
     // A failed probe must not poison the TTL cache: the next refresh retries it.
-    if (failedProbes > 0) return { available: true, sessions }
-    const response: SessionListResponse = { available: true, sessions }
+    if (failedProbes > 0) {
+      return { ...response, sessions: [...response.sessions], suppressed: { ...response.suppressed, groups: [...response.suppressed.groups] } }
+    }
     this.listCache = { at: Date.now(), response }
-    return { ...response, sessions: [...response.sessions] }
+    return { ...response, sessions: [...response.sessions], suppressed: { ...response.suppressed, groups: [...response.suppressed.groups] } }
   }
 
   /** Drop the cached listing so the next open re-scans (used after consolidation commits). */
@@ -194,7 +284,7 @@ export class SessionCatalog {
   private async probeAll(
     snapshots: readonly MemorySessionSnapshot[],
     signal: AbortSignal | undefined,
-    verdicts: Map<string, SessionIneligibleReason | undefined>,
+    verdicts: Map<string, ProbeOutcome>,
   ): Promise<number> {
     if (snapshots.length === 0 || this.probeEvents === undefined) return 0
     let cursor = 0
@@ -204,9 +294,9 @@ export class SessionCatalog {
         signal?.throwIfAborted()
         const snapshot = snapshots[cursor]!
         cursor += 1
-        const verdict = await this.probeSession(snapshot, signal)
-        if (verdict === undefined) failed += 1
-        verdicts.set(snapshot.header.id, verdict)
+        const outcome = await this.probeSession(snapshot, signal)
+        if (outcome.reason === undefined) failed += 1
+        verdicts.set(snapshot.header.id, outcome)
       }
     })
     await Promise.all(workers)
@@ -216,10 +306,11 @@ export class SessionCatalog {
   private async probeSession(
     snapshot: MemorySessionSnapshot,
     signal?: AbortSignal,
-  ): Promise<SessionIneligibleReason | undefined> {
-    if (this.probeEvents === undefined) return undefined
+  ): Promise<ProbeOutcome> {
+    if (this.probeEvents === undefined) return { reason: undefined }
     const key = `${snapshot.header.id}@${snapshot.revision}`
-    if (this.probeCache.has(key)) return this.probeCache.get(key)
+    const cached = this.probeCache.get(key)
+    if (cached !== undefined) return cached
     let events: readonly unknown[] | undefined
     try {
       events = await this.probeEvents(snapshot.header.id, signal)
@@ -230,27 +321,54 @@ export class SessionCatalog {
     signal?.throwIfAborted()
     // If probeEvents failed/returned undefined, fail open for this call without
     // permanently caching `undefined` so a transient read error can self-heal.
-    if (events === undefined) return undefined
-    let verdict: SessionIneligibleReason | undefined
-    if (events.some(hasSubagentDescriptorEvent)) verdict = 'subagent'
+    if (events === undefined) return { reason: undefined }
+    const outcome = this.assess(events)
+    if (this.probeCache.size >= PROBE_CACHE_LIMIT) this.probeCache.clear()
+    this.probeCache.set(key, outcome)
+    return outcome
+  }
+
+  /** Turn a bounded event window into one probe verdict. */
+  private assess(events: readonly unknown[]): ProbeOutcome {
+    if (events.some(hasSubagentDescriptorEvent)) return { reason: 'subagent' }
+
+    // A saturated window may cut the Session before a later successful retry, so
+    // it can never prove the Session produced nothing. Both the empty and the
+    // zero-output verdicts need the whole log, not just its opening.
+    const saturated = events.length >= PROBE_EVENT_WINDOW
+    if (!saturated) {
+      const quality = classifySessionQuality(events, { classifyTrivial: false })
+      if (quality.class === 'failed-zero-output') {
+        const first = quality.terminalErrors[0]
+        return {
+          reason: 'failed-zero-output',
+          detail: {
+            firstUserText: quality.firstUserText,
+            title: null,
+            errorCode: first?.code,
+          },
+        }
+      }
+    }
+
     // A real Session opens with lifecycle and runtime events long before its first
     // user turn, so an empty-shell verdict needs both markers absent AND the window
     // to end before the limit; a saturated window proves nothing either way.
-    else if (events.length < PROBE_EVENT_WINDOW
+    if (!saturated
       && !events.some(isUserMessageEvent)
-      && !events.some(isTurnStartEvent)) verdict = 'empty'
-    if (this.probeCache.size >= PROBE_CACHE_LIMIT) this.probeCache.clear()
-    this.probeCache.set(key, verdict)
-    return verdict
+      && !events.some(isTurnStartEvent)) return { reason: 'empty' }
+
+    return { reason: undefined }
   }
 
+  /** Classify one snapshot using static verdicts, probe results, and receipts. */
   private classify(
     snapshot: MemorySessionSnapshot,
     secondById: ReadonlyMap<string, readonly MemorySessionSnapshot[]>,
     duplicateFirstIds: ReadonlySet<string>,
     latestReceipt?: ConsolidationReceipt,
     title: string | null = null,
-    probeReason?: SessionIneligibleReason,
+    probeOutcome: ProbeOutcome = { reason: undefined },
   ): SessionSummary {
     const workspace = workspaceReference(this.store, snapshot.header.cwd)
     const base = {
@@ -271,7 +389,7 @@ export class SessionCatalog {
 
     if (workspace === undefined) return { ...base, eligible: false, reason: 'workspace-unavailable' }
 
-    if (probeReason !== undefined) return { ...base, eligible: false, reason: probeReason }
+    if (probeOutcome.reason !== undefined) return { ...base, eligible: false, reason: probeOutcome.reason }
 
     const matching = secondById.get(snapshot.header.id)
     if (duplicateFirstIds.has(snapshot.header.id)

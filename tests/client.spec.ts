@@ -209,17 +209,21 @@ describe('Memory Workspace Browser API', () => {
               return { ok: true, value: { status: 'committed', revision: 'sha256:committed' } }
             }
             if (endpoint === 'sessions/list') {
-              return { ok: true, value: { available: true, sessions: [{
-                sessionId: 'session-browser',
-                title: 'Browser contract',
-                createdAt: 100,
-                workspaceId,
-                workspaceName: 'dsh-memory',
-                eligible: false,
-                reason: 'live',
-                latestReceipt: null,
-                archived: false,
-              }] } }
+              return { ok: true, value: {
+                available: true,
+                suppressed: { failedZeroOutput: 0, trivialAutomation: 0, groups: [] },
+                sessions: [{
+                  sessionId: 'session-browser',
+                  title: 'Browser contract',
+                  createdAt: 100,
+                  workspaceId,
+                  workspaceName: 'dsh-memory',
+                  eligible: false,
+                  reason: 'live',
+                  latestReceipt: null,
+                  archived: false,
+                }],
+              } }
             }
             if (endpoint === 'sessions/consolidate') {
               return { ok: true, value: {

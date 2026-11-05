@@ -47,8 +47,12 @@ interface WorkspaceReadResponse extends WorkspaceSummary {
 interface WorkspaceListResponse {
   workspaces: WorkspaceSummary[];
 }
-/** Deterministic reason why a persisted Session cannot be consolidated. */
-type SessionIneligibleReason = 'live' | 'missing-cwd' | 'workspace-unavailable' | 'unstable' | 'subagent' | 'empty';
+/**
+ * Deterministic reason why a persisted Session is not offered as a candidate.
+ * `failed-zero-output` Sessions produced nothing and are hidden from the list
+ * entirely; they are reported through `SessionListResponse.suppressed`.
+ */
+type SessionIneligibleReason = 'live' | 'missing-cwd' | 'workspace-unavailable' | 'unstable' | 'subagent' | 'empty' | 'failed-zero-output';
 type SessionReceiptState = 'committing' | 'committed' | 'no-change' | 'cancelled' | 'source-changed' | 'target-conflict' | 'invalid-proposal' | 'output-truncated' | 'provider-failed' | 'evidence-too-large' | 'internal-error';
 /** Browser-safe receipt status without model route, Workspace key, or revisions. */
 interface SessionReceiptSummary {
@@ -74,10 +78,27 @@ type SessionSummary = {
   eligible: false;
   reason: SessionIneligibleReason;
 });
+/** One suppressed cluster of Sessions that share a failure fingerprint. */
+interface SuppressedSessionGroup {
+  readonly fingerprint: string;
+  readonly title: string | null;
+  readonly count: number;
+  readonly firstCreatedAt: number;
+  readonly lastCreatedAt: number;
+  readonly reason: 'failed-zero-output' | 'trivial-automation';
+  readonly errorCode?: string;
+}
+/** Counts and clusters for Sessions intentionally omitted from `sessions`. */
+interface SuppressedSessionsSummary {
+  readonly failedZeroOutput: number;
+  readonly trivialAutomation: number;
+  readonly groups: SuppressedSessionGroup[];
+}
 /** Session candidate capability and ordered persisted Session list. */
 interface SessionListResponse {
   available: boolean;
   sessions: SessionSummary[];
+  suppressed: SuppressedSessionsSummary;
 }
 interface SessionConsolidatePayload {
   sessionId: string;

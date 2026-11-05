@@ -1051,6 +1051,7 @@ function sessionReasonKey(reason: SessionIneligibleReason): MemoryLocaleKey {
     case 'unstable': return 'sessionReasonUnstable'
     case 'subagent': return 'sessionReasonSubagent'
     case 'empty': return 'sessionReasonEmpty'
+    case 'failed-zero-output': return 'sessionReasonFailedZeroOutput'
   }
 }
 

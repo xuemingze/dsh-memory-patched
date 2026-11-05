@@ -106,7 +106,7 @@ describe('Memory RPC protocol', () => {
     })).toMatchObject({ workspaceId: WORKSPACE_ID, changes: [{ action: 'delete' }, { action: 'put' }] })
     expect(parseWorkspaceCommitResponse({ status: 'conflict', currentRevision: 'sha256:newer' }))
       .toEqual({ status: 'conflict', currentRevision: 'sha256:newer' })
-    expect(parseSessionListResponse({ available: true, sessions: [{
+    expect(parseSessionListResponse({ available: true, suppressed: { failedZeroOutput: 0, trivialAutomation: 0, groups: [] }, sessions: [{
       sessionId: 'session-1',
       title: 'Memory design',
       createdAt: 42,
@@ -116,7 +116,7 @@ describe('Memory RPC protocol', () => {
       reason: null,
       latestReceipt: null,
     }] })).toMatchObject({ available: true, sessions: [{ sessionId: 'session-1', eligible: true }] })
-    expect(parseSessionListResponse({ available: true, sessions: [{
+    expect(parseSessionListResponse({ available: true, suppressed: { failedZeroOutput: 0, trivialAutomation: 0, groups: [] }, sessions: [{
       sessionId: 'session-archived',
       title: null,
       createdAt: 43,
@@ -127,7 +127,7 @@ describe('Memory RPC protocol', () => {
       latestReceipt: null,
       archived: true,
     }] })).toMatchObject({ sessions: [{ sessionId: 'session-archived', archived: true }] })
-    expect(parseSessionListResponse({ available: true, sessions: [{
+    expect(parseSessionListResponse({ available: true, suppressed: { failedZeroOutput: 0, trivialAutomation: 0, groups: [] }, sessions: [{
       sessionId: 'session-legacy',
       title: null,
       createdAt: 44,
@@ -154,7 +154,7 @@ describe('Memory RPC protocol', () => {
       changeCount: 0,
       debugLoggingEnabled: false,
     })).toMatchObject({ status: 'evidence-too-large' })
-    expect(parseSessionListResponse({ available: true, sessions: [{
+    expect(parseSessionListResponse({ available: true, suppressed: { failedZeroOutput: 0, trivialAutomation: 0, groups: [] }, sessions: [{
       sessionId: 'session-2',
       title: null,
       createdAt: 43,
@@ -243,8 +243,8 @@ describe('Memory RPC protocol', () => {
     })).toThrow(/reserved/)
     expect(() => parseWorkspaceCommitResponse({ status: 'committed', revision: 'sha256:new', path: '/tmp' }))
       .toThrow(/exactly/)
-    expect(() => parseSessionListResponse({ available: false, sessions: [{ sessionId: 'hidden' }] })).toThrow(/empty/)
-    expect(() => parseSessionListResponse({ available: true, sessions: [{
+    expect(() => parseSessionListResponse({ available: false, suppressed: { failedZeroOutput: 0, trivialAutomation: 0, groups: [] }, sessions: [{ sessionId: 'hidden' }] })).toThrow(/empty/)
+    expect(() => parseSessionListResponse({ available: true, suppressed: { failedZeroOutput: 0, trivialAutomation: 0, groups: [] }, sessions: [{
       sessionId: 'session-1',
       title: 'Memory design',
       createdAt: 42,
@@ -254,7 +254,7 @@ describe('Memory RPC protocol', () => {
       reason: 'live',
       latestReceipt: null,
     }] })).toThrow(/null/)
-    expect(() => parseSessionListResponse({ available: true, sessions: [{
+    expect(() => parseSessionListResponse({ available: true, suppressed: { failedZeroOutput: 0, trivialAutomation: 0, groups: [] }, sessions: [{
       sessionId: 'session-1',
       title: 'Memory design',
       createdAt: 42,
@@ -264,7 +264,7 @@ describe('Memory RPC protocol', () => {
       reason: 'unknown',
       latestReceipt: null,
     }] })).toThrow(/explain/)
-    expect(() => parseSessionListResponse({ available: true, sessions: [{
+    expect(() => parseSessionListResponse({ available: true, suppressed: { failedZeroOutput: 0, trivialAutomation: 0, groups: [] }, sessions: [{
       sessionId: 'session-1',
       title: null,
       createdAt: 42,
@@ -274,7 +274,7 @@ describe('Memory RPC protocol', () => {
       reason: 'workspace-unavailable',
       latestReceipt: null,
     }] })).toThrow(/both be null/)
-    expect(parseSessionListResponse({ available: true, sessions: [{
+    expect(parseSessionListResponse({ available: true, suppressed: { failedZeroOutput: 0, trivialAutomation: 0, groups: [] }, sessions: [{
       sessionId: 'session-sub',
       title: null,
       createdAt: 45,
@@ -284,7 +284,7 @@ describe('Memory RPC protocol', () => {
       reason: 'subagent',
       latestReceipt: null,
     }] })).toMatchObject({ sessions: [{ sessionId: 'session-sub', reason: 'subagent' }] })
-    expect(parseSessionListResponse({ available: true, sessions: [{
+    expect(parseSessionListResponse({ available: true, suppressed: { failedZeroOutput: 0, trivialAutomation: 0, groups: [] }, sessions: [{
       sessionId: 'session-empty',
       title: null,
       createdAt: 46,
