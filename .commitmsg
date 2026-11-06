@@ -1,4 +1,0 @@
-chore: drop the commit-message scratch file
-
-It was a temporary file written by the shell to avoid quoting problems and should
-not have been committed.
