@@ -171,10 +171,14 @@ describe('Driving a Dream run through an agent', () => {
     config: { provider: 'p', model: 'm', maxTokens: 1000 },
   }
 
-  it('restricts the worker to the one proposal tool', async () => {
+  it('clears the global tools and registers exactly one of its own', async () => {
+    // `restrict` validates against tools that already exist. Naming the proposal
+    // tool there fails with 'unknown global tool "memory_dream_propose"' because
+    // the register call below is what creates it. The working order is: empty
+    // the allow-list, then register.
     const { agents, seen } = makeAgents([{ actions: [] }])
     await runDreamWithAgent({ ...base, agents, validate: () => ({ accepted: true, message: 'ok' }) })
-    expect(seen.allowed).toEqual([DREAM_PROPOSAL_TOOL])
+    expect(seen.allowed).toEqual([])
     expect(seen.registered).toEqual([DREAM_PROPOSAL_TOOL])
   })
 

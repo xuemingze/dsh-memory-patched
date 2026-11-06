@@ -179,9 +179,11 @@ export async function runDreamWithAgent(options: DreamAgentRunOptions): Promise<
     ...(options.signal === undefined ? {} : { signal: options.signal }),
     setup: scope => {
       scope.systemPrompt.suppressRuntimeContext()
-      // One tool, nothing else: a worker with file access could read records the
-      // plan was never validated against.
-      scope.tools.restrict({ allow: [DREAM_PROPOSAL_TOOL] })
+      // Strip every global tool first, then register the only one the worker may
+      // use. `restrict` validates names against tools that already exist, so
+      // naming the proposal tool here fails with "unknown global tool" — the
+      // tool is created by the register call below, not before it.
+      scope.tools.restrict({ allow: [] })
       scope.tools.register(
         defineDreamTool((value: unknown) => {
           attempts += 1
