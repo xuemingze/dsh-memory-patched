@@ -159,6 +159,16 @@ export interface DreamPlanResponse {
   readonly proposalHash: string
   readonly actions: readonly DreamActionView[]
   readonly createdAt: number
+  /**
+   * Fingerprints the user already declined for this plan.
+   *
+   * Panel-only: `dream/status` adds it so an action the user dismissed comes
+   * back marked rather than looking like a fresh suggestion. It is absent on a
+   * plan read through `dream/proposal/read`, which is why it is optional — and
+   * why adding it here rather than widening the panel's own parser keeps both
+   * callers on one contract.
+   */
+  readonly declined?: readonly string[]
 }
 
 /** A finished Dream run: what it decided and whether it took effect. */
@@ -264,10 +274,16 @@ function parseDreamActions(value: unknown, label: string): DreamActionView[] {
 /** Parse a plan awaiting approval. */
 export function parseDreamPlanResponse(value: unknown): DreamPlanResponse {
   const record = dreamRecord(value, 'dream plan')
+  // `declined` is panel-only, so it is accepted but not required: a plan read
+  // through dream/proposal/read does not carry it. Listing it here rather than
+  // giving the panel its own parser keeps one contract for both callers — the
+  // asymmetry that produced "dream plan has unknown field: declined" was the
+  // producer adding a field the consumer's whitelist never learned about.
   dreamExactKeys(
     record,
     ['runId', 'scopeKey', 'state', 'risk', 'proposalHash', 'actions', 'createdAt'],
     'dream plan',
+    ['declined'],
   )
   if (record.state !== 'planned') {
     throw new DreamProtocolError('dream plan.state must be "planned"')
@@ -283,7 +299,16 @@ export function parseDreamPlanResponse(value: unknown): DreamPlanResponse {
     proposalHash: dreamText(record.proposalHash, 'dream plan.proposalHash'),
     actions: parseDreamActions(record.actions, 'dream plan.actions'),
     createdAt: dreamTime(record.createdAt, 'dream plan.createdAt'),
+    ...(record.declined === undefined
+      ? {}
+      : { declined: parseDeclinedFingerprints(record.declined, 'dream plan.declined') }),
   }
+}
+
+/** Fingerprints are opaque strings; anything else is a producer bug. */
+function parseDeclinedFingerprints(value: unknown, label: string): readonly string[] {
+  if (!Array.isArray(value)) throw new DreamProtocolError(`${label} must be an array`)
+  return value.map((entry, index) => dreamText(entry, `${label}[${index}]`))
 }
 
 /**

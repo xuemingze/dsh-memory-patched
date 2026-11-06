@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  parseDreamPanelResponse,
   parseDreamRunResponse,
   parseDreamPlanResponse,
   DreamProtocolError,
@@ -166,5 +167,42 @@ describe('Failed receipts stay renderable', () => {
     expect(() => parseDreamRunResponse({
       ...base, state: 'rejected', proposalHash: 42,
     })).toThrow(/proposalHash/u)
+  })
+})
+describe('Panel-only plan fields', () => {
+  const plan = {
+    runId: 'r1', scopeKey: 's1', state: 'planned', risk: 'metadata-only',
+    proposalHash: 'h', actions: [], createdAt: 1,
+  }
+
+  it('accepts declined on a staged plan', () => {
+    // dream/status adds this so a dismissed action comes back marked. The plan
+    // file on disk does not carry it, which is why it must be optional.
+    const parsed = parseDreamPlanResponse({ ...plan, declined: ['fp-1', 'fp-2'] })
+    expect(parsed.declined).toEqual(['fp-1', 'fp-2'])
+  })
+
+  it('accepts a plan without declined', () => {
+    expect(parseDreamPlanResponse(plan).declined).toBeUndefined()
+  })
+
+  it('rejects a malformed declined list', () => {
+    expect(() => parseDreamPlanResponse({ ...plan, declined: 'fp-1' })).toThrow(/declined/u)
+    expect(() => parseDreamPlanResponse({ ...plan, declined: [1] })).toThrow(/declined/u)
+  })
+
+  it('still rejects a field nobody declared', () => {
+    // Being permissive about known optional keys must not open the record up.
+    expect(() => parseDreamPlanResponse({ ...plan, surprise: true }))
+      .toThrow(/unknown field: surprise/u)
+  })
+
+  it('round-trips through the panel parser', () => {
+    const panel = parseDreamPanelResponse({
+      mode: 'shadow',
+      pending: [{ ...plan, declined: ['fp-1'] }],
+      runs: [],
+    })
+    expect(panel.pending[0]?.declined).toEqual(['fp-1'])
   })
 })

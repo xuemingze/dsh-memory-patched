@@ -1,27 +1,18 @@
-fix(dream): drop `required` from the tool output schema
+fix(protocol): accept the panel-only declined field on a plan
 
-Six failures had one cause, and it was not the schema: the test environment and
-the packaged host run different defineTool implementations.
+dream/status adds `declined` to each pending plan so an action the user already
+dismissed comes back marked instead of looking like a fresh suggestion. The
+parser's key whitelist never learned about it, so the panel failed with
+"dream plan has unknown field: declined" — after a run that had finally produced
+a real, storable plan.
 
-Packaged host (app.asar): defineTool calls valueSchemaSpecToJsonSchema, which
-compiles with allowRequired: false. A root-level `required` throws "schema.required
-is not supported by the value schema DSL"; a property-level `required: true` is
-compiled into the parent's required array.
+Effect: the one screen that would have shown the first working proposal could not
+render at all.
 
-Test double: defineTool validates shape and returns the options object unchanged.
-The property form reaches the registry raw and fails "...is not supported on type
-boolean"; the root form passes untouched.
+`declined` is optional: `dream/proposal/read` serves the plan file as stored and
+that file carries no such field. It is validated when present (array of
+non-empty strings) and unknown keys are still refused, so widening the record
+does not open it up.
 
-The two dialects reject each other's correct form, so no schema using `required`
-can satisfy both. Every earlier attempt fixed one and broke the other, and each
-one passed the suite because the suite was asserting a dialect the packaged host
-never sees.
-
-The output schema now uses no `required` at any level. The fields stay declared,
-and parseDreamProposal rejects a submission that omits them, so the constraint is
-enforced one layer down where both environments observe it.
-
-A new test reimplements the packaged host's two gates from its source (the DSL
-keyword whitelist with allowRequired, and the raw-schema keyword subset) and
-checks the schema against both, so a future edit that reintroduces `required`
-fails here rather than in the user's panel.
+The plan itself is intact on disk: one set-priority action on
+qq-companion-session. Nothing was lost; only the view was blocked.
