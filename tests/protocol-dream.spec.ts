@@ -138,3 +138,33 @@ describe('Dream panel payload', () => {
     expect(() => parseDreamPanelResponse({ pending: [], runs: [] })).toThrow(/mode/u)
   })
 })
+describe('Failed receipts stay renderable', () => {
+  const base = {
+    runId: 'dream-1', scopeKey: 'scope-a', risk: 'metadata-only',
+    beforeRevision: 'gov1:0', afterRevision: 'gov1:0', changes: [], createdAt: 1,
+  }
+
+  it('accepts an empty hash on a rejected run', () => {
+    // The panel loads history on open. Rejecting this made the whole panel show a
+    // protocol error, hiding the one thing the user needed: why the run failed.
+    const parsed = parseDreamRunResponse({
+      ...base, state: 'rejected', proposalHash: '', error: 'restrict failed',
+    })
+    expect(parsed.state).toBe('rejected')
+    expect(parsed.proposalHash).toBe('')
+    expect(parsed.error).toBe('restrict failed')
+  })
+
+  it('still requires a hash on a committed run', () => {
+    // A committed run without a hash cannot be verified against its own receipt.
+    expect(() => parseDreamRunResponse({
+      ...base, state: 'committed', proposalHash: '',
+    })).toThrow(/proposalHash/u)
+  })
+
+  it('rejects a non-string hash in either case', () => {
+    expect(() => parseDreamRunResponse({
+      ...base, state: 'rejected', proposalHash: 42,
+    })).toThrow(/proposalHash/u)
+  })
+})

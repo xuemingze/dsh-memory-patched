@@ -220,6 +220,20 @@ function dreamText(value: unknown, label: string): string {
   return value
 }
 
+/**
+ * A string that may be empty.
+ *
+ * A run that never produced a proposal has no hash, so `""` is the honest value
+ * rather than a placeholder. Requiring a non-empty hash made the panel refuse to
+ * render the receipts a user most needs to read — the failed ones.
+ */
+function dreamOptionalText(value: unknown, label: string): string {
+  if (typeof value !== 'string') {
+    throw new DreamProtocolError(`${label} must be a string`)
+  }
+  return value
+}
+
 function dreamTime(value: unknown, label: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     throw new DreamProtocolError(`${label} must be a number`)
@@ -319,7 +333,11 @@ export function parseDreamRunResponse(value: unknown): DreamRunResponse {
     scopeKey: dreamText(record.scopeKey, 'dream run.scopeKey'),
     state: record.state as string,
     risk: record.risk as string,
-    proposalHash: dreamText(record.proposalHash, 'dream run.proposalHash'),
+    // Only a run that reached a proposal can carry a hash. Demanding one from a
+    // failed run would either force a fake value or hide the receipt entirely.
+    proposalHash: record.state === 'committed'
+      ? dreamText(record.proposalHash, 'dream run.proposalHash')
+      : dreamOptionalText(record.proposalHash, 'dream run.proposalHash'),
     beforeRevision: dreamText(record.beforeRevision, 'dream run.beforeRevision'),
     afterRevision: dreamText(record.afterRevision, 'dream run.afterRevision'),
     changes: parseDreamActions(record.changes, 'dream run.changes'),
