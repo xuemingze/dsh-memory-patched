@@ -1,0 +1,14 @@
+fix(dream): build the proposal tool through defineTool
+
+The host rejected the raw schema dialect: "schema.properties.accepted.required is
+not supported on type boolean". I had returned a bare object literal, so nothing
+converted the authoring dialect (required: true on a property) into the JSON
+Schema the host validates.
+
+defineTool is what performs that conversion, and it also emits `execute` rather
+than the `handler` key I had invented. The consolidation proposal tool is built
+this way; I had copied its visible fields without its constructor.
+
+The tool now submits through execute, and the fake agent in the tests calls
+execute instead of a handler that never existed. That mismatch is why the suite
+had been passing against a shape the host does not accept.

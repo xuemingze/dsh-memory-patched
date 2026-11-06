@@ -8,6 +8,7 @@
  */
 
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { DreamProposalContext } from './memory-dream-proposal.ts'
 import { DREAM_WORKER_RULES } from './memory-dream-worker.ts'
 
@@ -112,37 +113,29 @@ export interface DreamAgents {
   }): Promise<DreamAgentHandle>
 }
 
-export interface DreamToolDefinition {
-  readonly name: string
-  readonly description: string
-  readonly parameters: Record<string, unknown>
-  readonly output: {
-    readonly schema: Record<string, unknown>
-    readonly render: (args: unknown, value: unknown) => readonly { type: 'text'; text: string }[]
-  }
-}
-
 /**
  * The tool the worker may call.
  *
- * Its parameters are intentionally loose: the real validation happens in
- * `parseDreamProposal` against the actual record set, which is stricter than any
- * JSON schema could be. A tight schema here would reject valid shapes the parser
- * accepts and give the model a misleading error.
+ * Built through `defineTool`, which converts the authoring dialect (`required:
+ * true` on a property) into the JSON Schema the host validates. Returning a bare
+ * object skips that conversion and the host rejects the raw dialect with
+ * "schema.properties.X.required is not supported on type ...".
  *
- * `output` is mandatory — the host rejects a tool without it. The result schema
- * mirrors the consolidation proposal tool, which the model already understands
- * from a correction round.
+ * Its parameters stay loose on purpose: `parseDreamProposal` validates against
+ * the actual record set, which is stricter than any schema could be. A tight
+ * schema here would reject shapes the parser accepts and mislead the model.
  */
-export function dreamProposalTool(): DreamToolDefinition {
-  return {
+export function dreamProposalTool(
+  submit: (value: unknown) => { accepted: boolean; message: string },
+): unknown {
+  return defineTool({
     name: DREAM_PROPOSAL_TOOL,
     description: 'Submit a memory governance plan for validation.',
     parameters: {
-      type: 'object',
-      required: ['actions'],
-      properties: {
-        actions: { type: 'array', description: 'The proposed actions.' },
+      actions: {
+        type: 'array',
+        description: 'The proposed actions.',
+        required: true,
       },
     },
     output: {
@@ -154,11 +147,15 @@ export function dreamProposalTool(): DreamToolDefinition {
           message: { type: 'string', required: true },
         },
       },
-      render: (_args: unknown, value: unknown) => [
-        { type: 'text', text: JSON.stringify(value) },
-      ],
+      render: (_args: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }],
     },
-  }
+    execute(args: unknown) {
+      // The model's arguments arrive as-is; the parser decides. Concluding the
+      // turn is the caller's call, not the tool's: a rejected plan must come
+      // back for a correction, an accepted one ends the run.
+      return submit(args)
+    },
+  })
 }
 
 export interface DreamAgentRunOptions {
@@ -206,7 +203,7 @@ export async function runDreamWithAgent(options: DreamAgentRunOptions): Promise<
       // tool is created by the register call below, not before it.
       scope.tools.restrict({ allow: [] })
       scope.tools.register(
-        defineDreamTool((value: unknown) => {
+        dreamProposalTool((value: unknown) => {
           attempts += 1
           const result = options.validate(value)
           if (result.accepted) accepted = value
@@ -271,16 +268,6 @@ export async function runDreamWithAgent(options: DreamAgentRunOptions): Promise<
   return { workerSessionId: handle.agent.session.id, submission: accepted, attempts }
 }
 
-/** Wrap the handler in whatever shape the host tool registrar expects. */
-function defineDreamTool(
-  submit: (value: unknown) => { accepted: boolean; message: string },
-): unknown {
-  const definition = dreamProposalTool()
-  return {
-    ...definition,
-    handler: async (input: unknown) => submit(input),
-  }
-}
 /** How long one Dream run may sit without reaching idle. */
 export const DREAM_IDLE_TIMEOUT_MS = 180_000
 

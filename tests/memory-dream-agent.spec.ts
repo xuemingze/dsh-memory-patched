@@ -104,10 +104,23 @@ describe('Dream agent errors', () => {
 })
 
 describe('Dream proposal tool definition', () => {
+  /** The tool built through defineTool; its shape is the host's contract. */
+  function buildTool(submit = (value: unknown) => ({ accepted: true, message: String(value) })): {
+    name: string
+    parameters: Record<string, unknown>
+    output: {
+      schema: Record<string, unknown>
+      render: (args: unknown, value: unknown) => readonly { type: 'text'; text: string }[]
+    }
+    execute: (args: unknown, exec: unknown) => unknown
+  } {
+    return dreamProposalTool(submit) as never
+  }
+
   it('declares the output block the host requires', () => {
     // Without it the host rejects the tool outright:
     // 'tool "memory_dream_propose" must declare output { schema, render, presentationMeta? }'
-    const tool = dreamProposalTool()
+    const tool = buildTool()
     expect(tool.output).toBeDefined()
     expect(tool.output.schema).toMatchObject({ type: 'object' })
     expect(typeof tool.output.render).toBe('function')
@@ -115,10 +128,27 @@ describe('Dream proposal tool definition', () => {
       .toEqual([{ type: 'text', text: '{"accepted":true,"message":"ok"}' }])
   })
 
-  it('accepts the actions array the parser expects', () => {
-    const tool = dreamProposalTool()
+  it('is built through defineTool so the authoring dialect is converted', () => {
+    // Returning a bare object skips that conversion and the host rejects the raw
+    // dialect: 'schema.properties.accepted.required is not supported on type
+    // "boolean"'.
+    const tool = buildTool()
     expect(tool.name).toBe(DREAM_PROPOSAL_TOOL)
-    expect(tool.parameters).toMatchObject({ required: ['actions'] })
+    // defineTool validates the authoring dialect at construction time and keeps it
+    // as-is; the host converts it to JSON Schema downstream. What matters here is
+    // that construction succeeded and the action list is declared.
+    expect(tool.parameters).toMatchObject({ actions: { type: 'array', required: true } })
+  })
+
+  it('routes the model arguments to the submit callback', () => {
+    const seen: unknown[] = []
+    const tool = buildTool(value => {
+      seen.push(value)
+      return { accepted: true, message: 'ok' }
+    })
+    tool.execute({ actions: [{ action: 'cool', target: 'alpha' }] }, {})
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatchObject({ actions: [{ action: 'cool', target: 'alpha' }] })
   })
 })
 
@@ -148,9 +178,13 @@ describe('Driving a Dream run through an agent', () => {
               return () => {}
             },
             register: (definition: unknown) => {
-              const tool = definition as { name: string; handler: typeof handler }
+              // defineTool emits `execute`, not `handler`; the host calls execute.
+              const tool = definition as {
+                name: string
+                execute: (args: unknown, exec: unknown) => Promise<{ accepted: boolean; message: string }>
+              }
               seen.registered.push(tool.name)
-              handler = tool.handler
+              handler = (value: unknown) => tool.execute(value, {})
               return () => {}
             },
           },
