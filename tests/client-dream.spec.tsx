@@ -162,3 +162,29 @@ describe('Dream panel', () => {
     }
   })
 })
+
+describe('Run button feedback', () => {
+  it('shows a running label instead of the idle one', () => {
+    // A run can take minutes. Without a label change the disabled button looks
+    // like a dead control and the user has no way to tell work is happening.
+    const html = renderToStaticMarkup(
+      <DreamView pending={[]} runs={[]} onRun={() => {}} busy t={t} />,
+    )
+    expect(html).toContain(zh.dreamRunning)
+    expect(html).not.toContain(zh.dreamRun)
+  })
+
+  it('returns to the idle label when not busy', () => {
+    const html = renderToStaticMarkup(
+      <DreamView pending={[]} runs={[]} onRun={() => {}} t={t} />,
+    )
+    expect(html).toContain(zh.dreamRun)
+    expect(html).not.toContain(zh.dreamRunning)
+  })
+
+  it('has the running label in both locales', () => {
+    expect(zh.dreamRunning.length).toBeGreaterThan(0)
+    expect(en.dreamRunning.length).toBeGreaterThan(0)
+    expect(zh.dreamRunning).not.toBe(en.dreamRunning)
+  })
+})

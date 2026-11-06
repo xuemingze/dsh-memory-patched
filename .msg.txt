@@ -1,18 +1,11 @@
-fix(dream): reject a set-priority that would not change the score
+fix(client): show that a Dream run is in progress
 
-The first approved plan committed successfully and changed nothing:
-before and after revision were identical, the score stayed 50, and the receipt
-said committed. The user spent six debugging rounds and a decision on a no-op.
+Clicking Run produced no visible change for up to three minutes. The request was
+working: the model proposed a set-priority that the new no-op check rejects, and
+it then spends a correction round deciding what to do instead. The button was
+disabled during that time but kept its idle label, so a live run and a dead
+button looked identical.
 
-Cause: parsePriority discards the model's score and recomputes it with rescore().
-For a record whose attributes already produce 50, rescore() returns 50, so the
-action writes back the value it read. Under the current design set-priority can
-never change anything — it is a deterministic function of the same inputs.
-
-Rejecting the no-op is the honest fix available without redesigning the action:
-the model gets the reason back through the correction round and can either
-propose something that matters or submit no change. A silent no-op is worse than
-a rejection because it looks like work happened.
-
-The deeper question — whether set-priority should exist at all if the model
-cannot move the score — is recorded as a design note rather than decided here.
+The label now switches to "Running... this can take a few minutes" while busy.
+That is the only signal the panel can give before the request settles, and
+without it the honest reading of the screen is that the click did nothing.

@@ -494,7 +494,10 @@ export function DreamView(props: DreamViewProps): React.JSX.Element {
           {onRun === undefined ? null : (
             <div>
               <MemoryButton type="button" variant="primary" disabled={busy} onClick={onRun}>
-                {t('dreamRun')}
+                {/* A run can take minutes. A greyed-out button with the same
+                    label reads as a dead control, and the label is the only
+                    signal the user gets until the request settles. */}
+                {busy ? t('dreamRunning') : t('dreamRun')}
               </MemoryButton>
             </div>
           )}
