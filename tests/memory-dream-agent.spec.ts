@@ -123,6 +123,16 @@ describe('Dream proposal tool definition', () => {
     const tool = buildTool()
     expect(tool.output).toBeDefined()
     expect(tool.output.schema).toMatchObject({ type: 'object' })
+    // output.schema is NOT converted by defineTool: it reaches the host verbatim,
+    // so it must be real JSON Schema. `required` on a property fails with
+    // 'schema.properties.accepted.required is not supported on type "boolean"'.
+    const schema = tool.output.schema as {
+      required?: string[]
+      properties?: Record<string, Record<string, unknown>>
+    }
+    expect(schema.required).toEqual(['accepted', 'message'])
+    expect(schema.properties?.accepted?.required).toBeUndefined()
+    expect(schema.properties?.message?.required).toBeUndefined()
     expect(typeof tool.output.render).toBe('function')
     expect(tool.output.render(undefined, { accepted: true, message: 'ok' }))
       .toEqual([{ type: 'text', text: '{"accepted":true,"message":"ok"}' }])

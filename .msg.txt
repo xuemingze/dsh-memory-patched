@@ -1,14 +1,14 @@
-fix(dream): build the proposal tool through defineTool
+fix(dream): write the tool output schema as real JSON Schema
 
-The host rejected the raw schema dialect: "schema.properties.accepted.required is
-not supported on type boolean". I had returned a bare object literal, so nothing
-converted the authoring dialect (required: true on a property) into the JSON
-Schema the host validates.
+Same error twice: unsupported JSON schema: schema.properties.accepted.required
+is not supported on type "boolean".
 
-defineTool is what performs that conversion, and it also emits `execute` rather
-than the `handler` key I had invented. The consolidation proposal tool is built
-this way; I had copied its visible fields without its constructor.
+defineTool converts `parameters` from the authoring dialect but passes
+`output.schema` through untouched. My output schema used the dialect form
+(required: true on a property) where the host validates real JSON Schema, so the
+tool was rejected before any model call.
 
-The tool now submits through execute, and the fake agent in the tests calls
-execute instead of a handler that never existed. That mismatch is why the suite
-had been passing against a shape the host does not accept.
+Moving `required` to the object level and listing the field names there. The test
+now asserts both halves: required is on the object, and no property carries its
+own required flag. Asserting only the shape I expected is what let the previous
+two attempts pass while the host kept refusing the tool.

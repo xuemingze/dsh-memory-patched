@@ -139,12 +139,17 @@ export function dreamProposalTool(
       },
     },
     output: {
+      // Real JSON Schema: `required` belongs on the object, not on a property.
+      // defineTool converts `parameters` but passes output.schema through, so the
+      // authoring dialect fails here with 'schema.properties.accepted.required is
+      // not supported on type "boolean"'.
       schema: {
         type: 'object',
         additionalProperties: false,
+        required: ['accepted', 'message'],
         properties: {
-          accepted: { type: 'boolean', required: true },
-          message: { type: 'string', required: true },
+          accepted: { type: 'boolean' },
+          message: { type: 'string' },
         },
       },
       render: (_args: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }],
