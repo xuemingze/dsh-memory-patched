@@ -116,6 +116,10 @@ export interface DreamToolDefinition {
   readonly name: string
   readonly description: string
   readonly parameters: Record<string, unknown>
+  readonly output: {
+    readonly schema: Record<string, unknown>
+    readonly render: (args: unknown, value: unknown) => readonly { type: 'text'; text: string }[]
+  }
 }
 
 /**
@@ -125,6 +129,10 @@ export interface DreamToolDefinition {
  * `parseDreamProposal` against the actual record set, which is stricter than any
  * JSON schema could be. A tight schema here would reject valid shapes the parser
  * accepts and give the model a misleading error.
+ *
+ * `output` is mandatory — the host rejects a tool without it. The result schema
+ * mirrors the consolidation proposal tool, which the model already understands
+ * from a correction round.
  */
 export function dreamProposalTool(): DreamToolDefinition {
   return {
@@ -136,6 +144,19 @@ export function dreamProposalTool(): DreamToolDefinition {
       properties: {
         actions: { type: 'array', description: 'The proposed actions.' },
       },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          accepted: { type: 'boolean', required: true },
+          message: { type: 'string', required: true },
+        },
+      },
+      render: (_args: unknown, value: unknown) => [
+        { type: 'text', text: JSON.stringify(value) },
+      ],
     },
   }
 }

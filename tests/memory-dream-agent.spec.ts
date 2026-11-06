@@ -104,6 +104,17 @@ describe('Dream agent errors', () => {
 })
 
 describe('Dream proposal tool definition', () => {
+  it('declares the output block the host requires', () => {
+    // Without it the host rejects the tool outright:
+    // 'tool "memory_dream_propose" must declare output { schema, render, presentationMeta? }'
+    const tool = dreamProposalTool()
+    expect(tool.output).toBeDefined()
+    expect(tool.output.schema).toMatchObject({ type: 'object' })
+    expect(typeof tool.output.render).toBe('function')
+    expect(tool.output.render(undefined, { accepted: true, message: 'ok' }))
+      .toEqual([{ type: 'text', text: '{"accepted":true,"message":"ok"}' }])
+  })
+
   it('accepts the actions array the parser expects', () => {
     const tool = dreamProposalTool()
     expect(tool.name).toBe(DREAM_PROPOSAL_TOOL)
