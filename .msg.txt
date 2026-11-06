@@ -1,14 +1,27 @@
-fix(dream): write the tool output schema as real JSON Schema
+fix(dream): drop `required` from the tool output schema
 
-Same error twice: unsupported JSON schema: schema.properties.accepted.required
-is not supported on type "boolean".
+Six failures had one cause, and it was not the schema: the test environment and
+the packaged host run different defineTool implementations.
 
-defineTool converts `parameters` from the authoring dialect but passes
-`output.schema` through untouched. My output schema used the dialect form
-(required: true on a property) where the host validates real JSON Schema, so the
-tool was rejected before any model call.
+Packaged host (app.asar): defineTool calls valueSchemaSpecToJsonSchema, which
+compiles with allowRequired: false. A root-level `required` throws "schema.required
+is not supported by the value schema DSL"; a property-level `required: true` is
+compiled into the parent's required array.
 
-Moving `required` to the object level and listing the field names there. The test
-now asserts both halves: required is on the object, and no property carries its
-own required flag. Asserting only the shape I expected is what let the previous
-two attempts pass while the host kept refusing the tool.
+Test double: defineTool validates shape and returns the options object unchanged.
+The property form reaches the registry raw and fails "...is not supported on type
+boolean"; the root form passes untouched.
+
+The two dialects reject each other's correct form, so no schema using `required`
+can satisfy both. Every earlier attempt fixed one and broke the other, and each
+one passed the suite because the suite was asserting a dialect the packaged host
+never sees.
+
+The output schema now uses no `required` at any level. The fields stay declared,
+and parseDreamProposal rejects a submission that omits them, so the constraint is
+enforced one layer down where both environments observe it.
+
+A new test reimplements the packaged host's two gates from its source (the DSL
+keyword whitelist with allowRequired, and the raw-schema keyword subset) and
+checks the schema against both, so a future edit that reintroduces `required`
+fails here rather than in the user's panel.

@@ -139,17 +139,25 @@ export function dreamProposalTool(
       },
     },
     output: {
-      // Real JSON Schema: `required` belongs on the object, not on a property.
-      // defineTool converts `parameters` but passes output.schema through, so the
-      // authoring dialect fails here with 'schema.properties.accepted.required is
-      // not supported on type "boolean"'.
+      // No `required` anywhere, deliberately.
+      //
+      // The two hosts disagree about the schema dialect:
+      //  - The packaged host compiles with compileValueSchema(allowRequired:
+      //    false), so a root-level `required` throws "schema.required is not
+      //    supported by the value schema DSL", while a property-level
+      //    `required: true` is accepted.
+      //  - The test double's defineTool is a passthrough that validates shape
+      //    only, so the property form reaches the registry raw and is rejected
+      //    as "...is not supported on type boolean", while the root form passes.
+      // A schema satisfying both cannot use `required` at all. The fields stay
+      // declared and the parser already rejects a submission missing them, so
+      // the constraint is enforced one layer down where it is always observed.
       schema: {
         type: 'object',
         additionalProperties: false,
-        required: ['accepted', 'message'],
         properties: {
-          accepted: { type: 'boolean' },
-          message: { type: 'string' },
+          accepted: { type: 'boolean', description: 'Whether the plan was accepted.' },
+          message: { type: 'string', description: 'Feedback for the model.' },
         },
       },
       render: (_args: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }],

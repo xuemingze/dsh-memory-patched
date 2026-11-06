@@ -126,13 +126,20 @@ describe('Dream proposal tool definition', () => {
     // output.schema is NOT converted by defineTool: it reaches the host verbatim,
     // so it must be real JSON Schema. `required` on a property fails with
     // 'schema.properties.accepted.required is not supported on type "boolean"'.
+    // No `required` at any level. The packaged host rejects a root-level one and
+    // the test double rejects a property-level one, so a schema that must satisfy
+    // both cannot carry the keyword. Asserting its absence is the only check that
+    // holds on both, and it is what the earlier attempts got wrong: each asserted
+    // one dialect and passed against the environment that accepted it.
     const schema = tool.output.schema as {
-      required?: string[]
+      required?: unknown
       properties?: Record<string, Record<string, unknown>>
     }
-    expect(schema.required).toEqual(['accepted', 'message'])
+    expect(schema.required).toBeUndefined()
     expect(schema.properties?.accepted?.required).toBeUndefined()
     expect(schema.properties?.message?.required).toBeUndefined()
+    expect(schema.properties?.accepted?.type).toBe('boolean')
+    expect(schema.properties?.message?.type).toBe('string')
     expect(typeof tool.output.render).toBe('function')
     expect(tool.output.render(undefined, { accepted: true, message: 'ok' }))
       .toEqual([{ type: 'text', text: '{"accepted":true,"message":"ok"}' }])
