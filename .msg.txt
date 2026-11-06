@@ -1,11 +1,21 @@
-fix(client): show that a Dream run is in progress
+fix(dream): end the turn so the run settles instead of timing out
 
-Clicking Run produced no visible change for up to three minutes. The request was
-working: the model proposed a set-priority that the new no-op check rejects, and
-it then spends a correction round deciding what to do instead. The button was
-disabled during that time but kept its idle label, so a live run and a dead
-button looked identical.
+Two clicks in a row hit the 180 s ceiling: "dream worker did not reach idle
+within 180000 ms". The agent never went idle because the tool never concluded a
+turn.
 
-The label now switches to "Running... this can take a few minutes" while busy.
-That is the only signal the panel can give before the request settles, and
-without it the honest reading of the screen is that the click did nothing.
+The tool returned feedback and nothing else. A rejected plan meant the model got
+a correction prompt, tried again, got rejected again — the agent stayed busy the
+whole time, so whenIdle() could not resolve. The consolidation proposal tool
+calls exec.concludeTurn() for exactly this reason, and I had assumed the model
+would stop on its own. It does not.
+
+The turn now concludes on acceptance, and also on the final permitted attempt:
+at that point the honest answer is "no plan", which the caller records as a
+rejection with the reason. A timeout carries none of that information.
+
+MAX attempts reuse DEFAULT_DREAM_MAX_ATTEMPTS so the tool and the worker agree on
+how many tries a run gets.
+
+Tests cover both branches: concluded ends the turn, not-concluded leaves it open
+for the correction round.

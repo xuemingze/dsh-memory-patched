@@ -10,7 +10,7 @@
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { DreamProposalContext } from './memory-dream-proposal.ts'
-import { DREAM_WORKER_RULES } from './memory-dream-worker.ts'
+import { DEFAULT_DREAM_MAX_ATTEMPTS, DREAM_WORKER_RULES } from './memory-dream-worker.ts'
 
 /** The tool Dream calls to submit. Distinct from the consolidation tool. */
 export const DREAM_PROPOSAL_TOOL = 'memory_dream_propose'
@@ -126,7 +126,7 @@ export interface DreamAgents {
  * schema here would reject shapes the parser accepts and mislead the model.
  */
 export function dreamProposalTool(
-  submit: (value: unknown) => { accepted: boolean; message: string },
+  submit: (value: unknown) => { accepted: boolean; message: string; concluded: boolean },
 ): unknown {
   return defineTool({
     name: DREAM_PROPOSAL_TOOL,
@@ -162,11 +162,18 @@ export function dreamProposalTool(
       },
       render: (_args: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }],
     },
-    execute(args: unknown) {
-      // The model's arguments arrive as-is; the parser decides. Concluding the
-      // turn is the caller's call, not the tool's: a rejected plan must come
-      // back for a correction, an accepted one ends the run.
-      return submit(args)
+    execute(args: unknown, exec: { concludeTurn(): void }) {
+      // The model's arguments arrive as-is; the parser decides.
+      //
+      // concludeTurn is required, not optional. Without it a rejected plan sends
+      // feedback and the model simply tries again — the agent never goes idle,
+      // and the run dies on the 180 s ceiling with nothing to show. An accepted
+      // plan must end the turn, and so must the final attempt of a run that keeps
+      // getting rejected: at that point the honest answer is "no plan", and the
+      // caller turns it into a receipt instead of a timeout.
+      const result = submit(args)
+      if (result.concluded) exec.concludeTurn()
+      return { accepted: result.accepted, message: result.message }
     },
   })
 }
@@ -221,11 +228,19 @@ export async function runDreamWithAgent(options: DreamAgentRunOptions): Promise<
           const result = options.validate(value)
           if (result.accepted) accepted = value
           else lastRejection = result.message
+          // End the turn on acceptance, and also on the last allowed attempt:
+          // a model that keeps proposing something invalid would otherwise loop
+          // until the idle timeout, and a timeout carries no information about
+          // what went wrong. Ending here turns it into a readable rejection.
+          const concluded = result.accepted || attempts >= DEFAULT_DREAM_MAX_ATTEMPTS
           return {
             accepted: result.accepted,
+            concluded,
             message: result.accepted
               ? 'Plan accepted.'
-              : `Plan rejected: ${result.message}. Correct it and submit again.`,
+              : concluded
+                ? `Plan rejected: ${result.message}. No further attempts will be accepted.`
+                : `Plan rejected: ${result.message}. Correct it and submit again.`,
           }
         }),
       )

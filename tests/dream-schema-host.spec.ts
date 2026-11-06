@@ -32,13 +32,13 @@ function compile(spec: Record<string, unknown>, path: string, allowRequired: boo
 
 describe('Output schema satisfies the packaged host', () => {
   it('compiles under the host DSL rules', () => {
-    const tool = dreamProposalTool(() => ({ accepted: true, message: 'ok' })) as Record<string, unknown>
+    const tool = dreamProposalTool(() => ({ accepted: true, message: 'ok', concluded: true })) as Record<string, unknown>
     const schema = (tool.output as Record<string, unknown>).schema as Record<string, unknown>
     expect(() => compile(schema, 'schema', false)).not.toThrow()
   })
 
   it('also passes the raw-schema keyword subset', () => {
-    const tool = dreamProposalTool(() => ({ accepted: true, message: 'ok' })) as Record<string, unknown>
+    const tool = dreamProposalTool(() => ({ accepted: true, message: 'ok', concluded: true })) as Record<string, unknown>
     const schema = (tool.output as Record<string, unknown>).schema as Record<string, unknown>
     // checkSchemaNode: every key must be a constraint keyword or annotation.
     const CONSTRAINT = new Set(['type', 'oneOf', 'properties', 'required', 'additionalProperties', 'items', 'enum', 'const'])

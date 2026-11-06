@@ -105,7 +105,7 @@ describe('Dream agent errors', () => {
 
 describe('Dream proposal tool definition', () => {
   /** The tool built through defineTool; its shape is the host's contract. */
-  function buildTool(submit = (value: unknown) => ({ accepted: true, message: String(value) })): {
+  function buildTool(submit = (value: unknown) => ({ accepted: true, message: String(value), concluded: true })): {
     name: string
     parameters: Record<string, unknown>
     output: {
@@ -161,11 +161,28 @@ describe('Dream proposal tool definition', () => {
     const seen: unknown[] = []
     const tool = buildTool(value => {
       seen.push(value)
-      return { accepted: true, message: 'ok' }
+      return { accepted: true, message: 'ok', concluded: true }
     })
-    tool.execute({ actions: [{ action: 'cool', target: 'alpha' }] }, {})
+    tool.execute({ actions: [{ action: 'cool', target: 'alpha' }] }, { concludeTurn: () => {} })
     expect(seen).toHaveLength(1)
     expect(seen[0]).toMatchObject({ actions: [{ action: 'cool', target: 'alpha' }] })
+  })
+
+  it('ends the turn when the run concludes', () => {
+    // Without concludeTurn the agent never goes idle: a rejected plan sends
+    // feedback, the model retries, and the run dies on the 180 s ceiling with
+    // nothing to show. Ending the turn is what makes the run settle.
+    let concluded = 0
+    const tool = buildTool(() => ({ accepted: true, message: 'ok', concluded: true }))
+    tool.execute({ actions: [] }, { concludeTurn: () => { concluded += 1 } })
+    expect(concluded).toBe(1)
+  })
+
+  it('keeps the turn open while the model may still correct itself', () => {
+    let concluded = 0
+    const tool = buildTool(() => ({ accepted: false, message: 'nope', concluded: false }))
+    tool.execute({ actions: [] }, { concludeTurn: () => { concluded += 1 } })
+    expect(concluded).toBe(0)
   })
 })
 
