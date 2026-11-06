@@ -5,7 +5,7 @@
 <h1 align="center">dsh-memory</h1>
 
 <p align="center">
-  Claude Code-inspired Auto Memory meets Codex-inspired Session consolidation, bringing simple, transparent, and context-efficient long-term memory to DeepSeek Harness.
+  Long-term memory for DeepSeek-Harness: authoritative Markdown on your own machine, Session consolidation, reversible forgetting, and cross-record governance.
 </p>
 
 <p align="center">
@@ -19,110 +19,131 @@
 
 <div align="center">
 
-[Design inspiration](#design-inspiration-claude-code--codex) · [Capabilities](#core-capabilities) · [Installation](#installation) · [Getting started](#getting-started) · [Evaluation](#evaluation) · [Data and privacy](#data-and-privacy) · [Documentation](#documentation)
+[What it is](#what-it-is) · [What it does](#what-it-does) · [Features](#features) · [How to use it](#how-to-use-it) · [Data and privacy](#data-and-privacy) · [Documentation](#documentation)
 
 </div>
 
-## Memory that carries forward
+## What it is
 
-Once a Session ends, an Agent can easily lose user preferences, project constraints, and lessons that were already verified. `dsh-memory` keeps this long-term information in readable Markdown files on the user's machine. Later requests receive only Global memory and the current Workspace index.
+`dsh-memory` is a local long-term memory plugin for DeepSeek-Harness.
 
-It does not require an external memory database or dedicated memory service, nor does it put every historical conversation back into context. The Agent sees a small index first and uses DSH's existing file tools to open only the relevant detailed memories.
+It keeps what an agent needs to remember across conversations — user preferences, project constraints, verified experience — in Markdown files on your own machine, and offers them to the agent in later conversations.
 
-## Evaluation
+Three properties distinguish it from other memory approaches.
 
-The repository includes a [LoCoMo-10 benchmark](benchmark/locomo/README.md) isolated from the published plugin code. It compares plain DSH, online memory only, and online memory plus Session consolidation. The benchmark guide provides copyable commands, environment variables, Judge, and Score steps for `conv-26` or all 10 samples, together with a self-contained [interactive results report](https://hr98w.github.io/dsh-memory/).
+**The authoritative data is Markdown, not a database.** Every memory is a `.md` file you can read, edit, and back up directly. No vector store, no separate service, no encrypted container. Open it in any editor, copy it from any file manager.
 
-![LoCoMo-10 accuracy across three modes](docs/assets/locomo10-accuracy.svg)
+**Only the index enters the context.** Each request carries the Global memory plus the *index* of the current workspace, not every body. The agent sees entry names and reads the one document it needs using DSH's existing file tools. Context cost does not grow linearly with memory size.
 
-In the retained results, Baseline scored 2.60%, Memory scored 73.05%, and Memory + Consolidate scored 77.60%. See the interactive report for complete results, experiment limitations, and per-question answers.
+**State and content are separate.** Whether a record is active, how long since it was used, whether it contradicts another — that lives in a governance sidecar. The body never moves, so any organisation can be undone.
 
-Baseline receives no conversation history; both memory modes read history to form memories first. Each mode has one complete result set, not an average of repeated independent experiments. This is not a comparison against full-context answering or other memory systems. The [experiment retrospective](docs/locomo-retrospective.md) covers the setup, observations, and limitations (in Chinese).
+It works alongside DSH's model, session, and filesystem services without making decisions on their behalf.
 
-## Design inspiration: Claude Code × Codex
+## What it does
 
-Instead of introducing a vector database or a separate memory service, `dsh-memory` combines two simple mechanisms already used by coding agents:
+The plugin works at four layers.
 
-| Inspiration | Borrowed idea | dsh-memory implementation |
+### 1. Layered storage with progressive disclosure
+
+Memory lives at two levels:
+
+| Level | Location | Content |
 |---|---|---|
-| [Claude Code](https://code.claude.com/docs/en/memory) | Use a concise `MEMORY.md` as an index and let the Agent read detailed Markdown on demand | Automatically provide Global memory and the current Workspace index, then progressively disclose details through DSH file tools |
-| [Codex](https://learn.chatgpt.com/docs/customization/memories) | Extract and consolidate reusable memory from eligible historical Sessions | Select finished, stable DSH Sessions and let a dedicated, constrained consolidation Agent propose memory changes |
+| Global | `$DSH_HOME/memory/GLOBAL.md` | Preferences and rules that apply across projects |
+| Workspace | `$DSH_HOME/memory/workspaces/<key>/` | Records belonging to one project |
 
-`dsh-memory` brings these ideas together: memories are layered in Markdown and disclosed on demand, while reusable information is continually distilled from historical Sessions.
+Injection provides the Global document in full and the current workspace's index. That index is a generated, always-rebuildable list of entry names pointing at the real records.
 
-## Core capabilities
+### 2. Session consolidation
 
-| Capability | Description |
+Finished, stable conversations can be turned into long-term memory.
+
+The flow is: the user triggers it manually → eligible Sessions are filtered → an isolated consolidation agent reads the evidence and proposes changes → the host validates evidence ownership and data revision → an atomic write records the result.
+
+The model only **proposes**. Which workspace a memory belongs to, whether its content matches the evidence, whether the revision moved under it — deterministic code decides those, not the model.
+
+### 3. Memory governance
+
+A record grows stale, is superseded by a newer fact, contradicts another, becomes too important to forget, or gets misjudged as broken because the network flaked once. The governance layer manages those states:
+
+- **Importance tiers**: critical / durable / working / transient, computed from observable signals rather than scored by a model
+- **Lifecycle**: `active → cooled → archived`, which changes only whether a record appears in the prompt
+- **Conflict classification**: hard conflict, temporal evolution, environment split, intermittent — each handled differently
+- **Forgetting review**: a report of what *would* happen, executed only after you confirm it
+
+**Forgetting does not touch the Markdown.** A "forgotten" record sits on disk intact; it simply stops appearing in prompts automatically. Change its state and it comes back.
+
+**No code path produces a deletion.** Physical removal is a separate act you have to ask for, and it is not part of any automated flow.
+
+### 4. Cross-record proposals (Dream)
+
+Dream reads the records that already exist and proposes how to organise them: merge duplicates, mark supersession, flag contradictions, adjust priority.
+
+Eight actions: four change a body (merge / supersede / extract-sop / promote-global), four change only metadata (mark-contested / set-priority / cool / archive). **There is no delete.**
+
+The default mode is `shadow`: it may compute and display, and writes nothing. Content changes need you to tick each action, in every mode.
+
+## Features
+
+### Settings panel
+
+The plugin adds six tabs to DSH Settings:
+
+| Tab | Purpose |
 |---|---|
-| Local Markdown | Authoritative memory lives under `$DSH_HOME/memory` and can be read or backed up directly |
-| Global / Workspace isolation | Global stores cross-project preferences; project facts stay in the current Workspace |
-| Claude Code-style progressive disclosure | Global memory and the current Workspace index are provided first; detailed Markdown is opened only when relevant |
-| Safe writes | The Agent and Web UI use the same write path and refuse to overwrite concurrent changes |
-| Codex-style Session consolidation | Evidence is selected from finished, stable historical Sessions before a dedicated consolidation Agent updates Global and source-Workspace memory |
-| Observability | Every review keeps a result record; optional Debug logs capture stages and error chains without copying conversation bodies or credentials |
-| Bilingual UI | The Memory pages follow the Chinese or English locale selected by DSH Web |
+| Global Memory | View and edit the `GLOBAL.md` that applies to every workspace |
+| Workspace Memory | Browse, create, and edit records for the current project |
+| Session Consolidation | Browse eligible Sessions, trigger consolidation, read recent results |
+| Forgetting Review | See what the forgetting policy *would* do, then confirm it |
+| Dream | Run Dream, review its proposals, approve them action by action |
+| Settings | Choose the consolidation model, enable Debug logging, set forgetting and Dream modes |
 
-## How it works
+### Endpoints
 
-```text
-Agent request
-  └─ Global memory + current Workspace MEMORY.md
-       └─ Agent searches detailed Markdown on demand
+The plugin exposes 18 RPC endpoints under `/memory` for the panel:
 
-Finished DSH Session
-  └─ User starts consolidation
-       └─ Dedicated consolidation Agent can iteratively review and propose Global / source-Workspace changes
-            └─ Host validates evidence, memory scope, and data versions
-                 └─ MemoryStore writes atomically and records the result
+```
+status                      global/read              global/replace
+workspaces/list             workspace/read           workspace/commit
+sessions/list               sessions/consolidate
+models/read                 models/select
+governance/status           governance/forgetting    governance/initialize
+dream/status                dream/run
+dream/proposal/read         dream/proposal/approve   dream/proposal/reject
 ```
 
-The model only proposes memory changes. Deterministic Host code owns memory scope resolution, content validation, version checks, and the final write.
+The web management interface is loopback-only.
 
-## Interface
+### Extension points
 
-Memory appears as a dedicated section in DSH Settings:
+Governance does not judge facts about the outside world. Whether a network is up, a proxy is stable, a model is available — external modules supply that, through two optional interfaces:
 
-| Page | Purpose |
-|---|---|
-| Global Memory | Read and edit `GLOBAL.md`, which is available across Workspaces |
-| Workspace Memory | Browse, create, update, and delete project-specific memories |
-| Session Consolidation | Browse stable Sessions by Workspace, run a review, and inspect the latest result |
-| Settings | Select an active DSH text model for consolidation and optionally enable Debug logs |
+- a **verification provider** reports whether a record still holds
+- a **trigger provider** decides when a governance pass should run
 
-![dsh-memory Settings page](docs/assets/memory-settings.png)
+Neither is required. Without them the feature degrades to manual operation rather than failing. See the [governance provider contract](docs/governance-providers.md).
 
-## Installation
+### Observability
 
-### Requirements
+Every consolidation and every Dream run writes a result record. Optional Debug logging captures stages and error chains, but never copies conversation bodies, memory bodies, or credentials.
 
-- DeepSeek Harness installed and a working `dsh web` command.
-- Building from source also requires Node.js `^22.19.0 || >=24.0.0` and pnpm.
+## How to use it
 
-### Install from npm
+### Installation
 
-Install from npm:
+**npm:**
 
 ```sh
 dsh plugin --profile web add @hr98w/dsh-memory
 ```
 
-Restart `dsh web` completely after installation.
-
-The plugin adapts to the newer DSH Web RPC and Session persistence APIs. Restart Web after updating the plugin; refreshing the page alone is not enough.
-
-### Install the patch branch (DSH >= 0.2.1-rc.2)
-
-This repository is a patch branch of upstream `v0.1.4` (`0.1.5`) carrying two DSH 0.2.1-rc.2 compatibility fixes: consolidation worker messages use the admissible `plugin:dsh-memory` source kind, and the Bundle patch depends on `webStartup`. See the [compatibility decision](docs/decisions/implemented/bug-fix/2026-10-30-dsh-021-rc2-compatibility.md).
+**Patched branch (DSH ≥ 0.2.1-rc.2):**
 
 ```sh
 dsh plugin --profile desktop add "github:xuemingze/dsh-memory-patched#v0.1.5"
 ```
 
-Built `lib/` artifacts are committed, so installation needs no local build. Restart DSH completely afterwards; remove an existing npm install from the same profile before switching.
-
-### Install from source
-
-After cloning the repository, run these commands from its root:
+**From source:**
 
 ```sh
 pnpm install
@@ -130,48 +151,52 @@ pnpm run build
 dsh plugin --profile web add .
 ```
 
-Then restart `dsh web` completely. Bundle composition and the Host ESM entry are loaded at process startup; refreshing the Browser does not apply Host code changes.
+You must **fully restart** DSH afterwards. Refreshing the page does not load new host code.
 
-## Getting started
+### First run
 
-Try cross-session memory in a test Workspace: tell the Agent, “Remember: this project's release checklist is called Pinecone. Before each release, remind me to check the rollback plan.” After `memory_update` succeeds, start a new Session in the same Workspace and ask, “What are this project's release conventions?” Check the answer and the Markdown record under Workspace Memory. Keep this project-specific convention out of Global.
+In any workspace, tell the agent:
 
-Online memory uses the current Agent's model; the separate model setting below is only for manual Session consolidation.
+> Remember: this project's release check codename is Pinecone; remind me to verify the rollback plan before every release.
 
-1. Configure and activate at least one text model in DSH Models. API keys remain under DSH ownership.
-2. Open Settings → Memory → Settings and select the provider/model used for Session consolidation.
-3. Use Global Memory for cross-project preferences and Workspace Memory for project facts and constraints.
-4. Select a finished, stable Session under Session Consolidation and start a review.
-5. Inspect the result. If troubleshooting is necessary, enable Debug in Settings before running another attempt.
+Once the write is confirmed, start a new Session in the same workspace and ask:
 
-## Data and privacy
+> What are the release conventions for this project?
 
-Default layout:
+If the answer uses the convention, memory is working. You can read the corresponding Markdown under "Workspace Memory".
 
-```text
-$DSH_HOME/memory/
-├── GLOBAL.md
-├── settings.yml
-├── consolidator-workspace/             # dedicated cwd for internal review Sessions
-├── debug/<review-id>/attempt-<n>.jsonl # written only when Debug is enabled
-├── reviews/<review-id>.md
-└── workspaces/<workspace-key>/
-    ├── MEMORY.md                        # generated index
-    └── <memory-name>.md                 # authoritative detailed memory
-```
+**Do not put project conventions in Global** — they would then appear in every unrelated project.
 
-- Web management APIs are available only to the local machine;
-- Web memory-write requests never submit a memory root, absolute path, cwd, or internal Workspace key; the header shows the Host-reported local memory root for diagnostics only;
-- Debug is off by default and does not record conversation evidence, memory/model proposal bodies, or API keys;
-- `MEMORY.md` is a rebuildable index; detailed Markdown files are authoritative Workspace data.
+### Consolidating a conversation
 
-Concurrency protection currently applies within one MemoryStore instance. Use one DSH writer process per `$DSH_HOME`; independent processes writing concurrently to the same directory can still overwrite each other's changes.
+1. Configure and activate at least one text model on DSH's Models page
+2. Open Settings → Memory → Settings and choose the consolidation model
+3. Under "Session Consolidation", pick a Session that has ended and is stable
+4. Start the consolidation and wait for it to finish
+5. Check the result; to troubleshoot, enable Debug and trigger it again
 
-“Local-first” means that authoritative memory is stored locally; it does not mean that every model operation runs offline. Normal Agent requests send the visible memory context to that Agent's model. Manual Session consolidation sends filtered conversation content, Global memory, and current Workspace memories to the model provider selected in Settings. Enable these features only when the provider's privacy policy is appropriate for your data.
+Consolidation uses its own model, independent of the one you converse with.
 
-See [SECURITY.md](SECURITY.md) for vulnerability reporting.
+### Reviewing forgetting
 
-## Development and verification
+1. Open "Forgetting Review"
+2. Read the report — it lists what *would* be cooled and archived
+3. Check each entry to confirm nothing important is harmed
+4. Confirm to apply
+
+An empty report is a normal result: no record has reached a cooling threshold yet.
+
+### Using Dream
+
+1. Open "Dream"
+2. Click "Run one planning pass" — this only creates proposals, it changes nothing
+3. Proposals appear under "Pending", each action carrying a risk label
+4. Tick the actions you agree with, or reject them all with a reason code
+5. Approval writes them; rejected actions come back marked "declined" next time
+
+`metadata-only` actions (priority, visibility, archive) can be undone by another metadata action. `content-change` actions (merge, supersede) cannot be reconstructed from what remains, which is why they are labelled separately.
+
+### Development
 
 ```sh
 pnpm run typecheck
@@ -180,74 +205,57 @@ pnpm run build
 pnpm run check
 ```
 
-Run `pnpm run check` before submitting code. See [docs/development.md](docs/development.md) for the verification matrix and manual checks, and [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow.
+Run `pnpm run check` before committing. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution flow and [docs/development.md](docs/development.md) for verification.
 
-## Memory governance
+## Data and privacy
 
-Memory is not just store-and-retrieve. A record grows stale, gets replaced by a
-newer fact, contradicts another record, becomes too important to forget, or gets
-misjudged as broken because the network flaked once. This layer manages those
-states.
+Default layout:
 
-### Scope
+```text
+$DSH_HOME/memory/
+├── GLOBAL.md                            # cross-workspace memory
+├── settings.yml                         # model selection and feature modes
+├── consolidator-workspace/              # dedicated cwd for the internal review Session
+├── debug/<review-id>/attempt-<n>.jsonl  # written only with Debug enabled
+├── reviews/<review-id>.md               # one result record per consolidation
+├── dream/                               # Dream receipts and staged plans
+├── governance/workspaces/<key>.json     # governance sidecar: state, scores, conflicts
+└── workspaces/<key>/
+    ├── MEMORY.md                        # generated index, rebuildable
+    └── <name>.md                        # authoritative detail
+```
 
-**dsh-memory owns**: what state a memory is in, which proposals may safely enter,
-and how forgetting works reversibly.
+- The web management interface is loopback-only
+- Web write requests never carry the memory root, absolute paths, or internal workspace keys
+- Debug is off by default and records neither conversation evidence, memory bodies, model proposals, nor API keys
+- `MEMORY.md` is a rebuildable index; the detail Markdown is authoritative
+- The governance sidecar is separate from the Markdown: state changes never touch a body, so any organisation is reversible
 
-**It does not own**: proving facts about the outside world. Whether the network,
-a proxy, a model, or a plugin is healthy belongs to external modules. dsh-memory
-consumes observations that carry a source, a time, and an environment
-fingerprint. It never probes.
+**Concurrency protection covers one MemoryStore instance.** Keep a single DSH process responsible for writes under one `$DSH_HOME`. Independent processes sharing a directory can still overwrite each other.
 
-The boundary is not stinginess. A memory system that diagnosed its own network
-would treat a transient outage as evidence about a record's truth and demote a
-good memory — and nobody could reproduce the judgement.
+**"Local-first" means the authoritative data is local, not that all processing is offline.** A normal conversation sends the visible memory context to that conversation's model; a manual consolidation sends the filtered conversation content to whichever provider you selected. Decide whether to enable these features based on your provider's privacy policy.
 
-### Collaboration over completeness
+For security issues see [SECURITY.md](SECURITY.md).
 
-An assembled system does not aim for one plugin doing everything; every module
-keeps a narrow contract, fails in isolation, and can be replaced. dsh-memory
-therefore exposes two optional extension points:
+## Evaluation
 
-- a **verification provider** reports whether a record still holds;
-- a **trigger provider** decides when a governance pass should run.
+The repository ships a [LoCoMo-10 evaluation](benchmark/locomo/README.md) kept separate from the shipped code, comparing three modes: no memory, online memory only, and online memory plus Session consolidation.
 
-Neither is required. Without them the feature degrades to manual operation rather
-than failing. See the [governance provider contract](docs/governance-providers.md).
+![LoCoMo-10 accuracy across three modes](docs/assets/locomo10-accuracy.svg)
 
-### Forgetting is a reversible lifecycle
-
-`active → cooled → archived` only changes whether a record appears in the prompt.
-**The Markdown is never touched.**
-
-**No code path produces a deletion.** Physical removal is a separate act you have
-to ask for in so many words.
-
-### Dream is not a background rewriter
-
-Dream reads the records that already exist and proposes how to organise them:
-merge, supersede, mark contested, adjust priority.
-
-The default is `shadow`: it may compute and display, and **writes nothing**.
-Content changes need you to tick each action, in every mode. No deletion, no
-automatic application, no timer.
-
-See the [Dream contract](docs/dream.md).
+In the retained run: Baseline 2.60%, Memory 73.05%, Memory + Consolidate 77.60%. These are one complete result per mode, not an average across repeated runs, and not a comparison against other memory systems. The [retrospective](docs/locomo-retrospective.md) records the setup and the limitations.
 
 ## Documentation
 
-- [Architecture](docs/architecture.md): implemented components and Host/Browser request flows;
-- [Design](docs/design.md): stable product rules and v0.1 boundaries;
-- [Session consolidation](docs/session-consolidation.md): full flow, state machine, and data contracts;
-- [Dream contract](docs/dream.md): the action vocabulary, approval flow, and write boundaries;
-- [Governance provider contract](docs/governance-providers.md): how external modules supply
-  observations, and how `intermittent` differs from `hard-conflict`;
-- [Roadmap](docs/roadmap.md): completed milestones and future directions;
-- [Development](docs/development.md): commands, verification matrix, and release procedure;
-- [LoCoMo-10 benchmark](benchmark/locomo/README.md): isolated runs, Judge, Score, and cost reporting;
-- [Decision records](docs/decisions/implemented/): non-trivial architecture, behavior, and protocol decisions.
-
-The detailed engineering documents are currently maintained in Chinese. Contributions improving their English accessibility are welcome.
+- [Architecture](docs/architecture.md): components and the Host/Browser request flow
+- [Design](docs/design.md): product rules and boundaries
+- [Session consolidation](docs/session-consolidation.md): full flow, state machine, and data contracts
+- [Dream contract](docs/dream.md): action vocabulary, approval flow, and write boundaries
+- [Governance provider contract](docs/governance-providers.md): how external modules supply observations
+- [Roadmap](docs/roadmap.md): completed milestones and future directions
+- [Development](docs/development.md): commands, verification matrix, and release procedure
+- [LoCoMo-10 benchmark](benchmark/locomo/README.md): isolated runs, Judge, Score, and cost reporting
+- [Decision records](docs/decisions/implemented/): non-trivial architecture, behavior, and protocol decisions
 
 ## License
 

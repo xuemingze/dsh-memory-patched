@@ -1,13 +1,26 @@
-fix(dream): keep Dream worker sessions out of the Session catalog
+docs: rewrite both READMEs around four questions
 
-A Dream run appeared in the Session list as "dream-mw4ggocx — consolidated",
-and the consolidation catalog offered it back as a conversation worth reviewing.
-The run is internal; it was never a conversation.
+Replaces the previous structure with four sections that answer, in order: what
+it is, what it does, what it offers, and how to use it. No account of how the
+implementation got here.
 
-The catalog excludes internal sessions by id pattern, and that pattern only knew
-the consolidation worker prefix. Dream now creates its session as
-`session-memory-dream-<runId>` and the same check recognises it.
+The old README led with design inspiration and an evaluation table, which told a
+reader where the ideas came from before saying what the plugin does. It also
+described four capabilities in one table while the plugin now ships governance,
+forgetting, and Dream alongside storage and consolidation.
 
-This also explains the noise around the last two attempts: the worker session was
-eligible for consolidation while the run itself was still pending, so the panel
-showed unrelated consolidation activity for a Dream click.
+Content changes worth noting:
+
+- The six Settings tabs are documented. The previous version listed four; the
+  forgetting and Dream panels were missing entirely.
+- The forgetting lifecycle and the no-deletion guarantee are stated explicitly,
+  because they are the properties a user needs before trusting the feature.
+- Dream's two risk classes are explained: metadata actions can be undone by
+  another metadata action, content changes cannot.
+- The data layout now includes dream/ and governance/, which existed on disk but
+  not in the documentation.
+- Local-first is qualified: the authoritative data is local, the model calls are
+  not.
+
+Both languages carry the same 262 lines and the same section order, so a reader
+can follow one against the other.
