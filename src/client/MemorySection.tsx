@@ -119,6 +119,13 @@ function MemoryButton({
       {...props}
       disabled={disabled}
       style={{
+        // The variant's base style must be applied here, not left to each call
+        // site. Without it a button that omits `style` renders with no cursor,
+        // no padding, and no background — it looks like text and the pointer
+        // shows an I-beam, so it cannot be clicked.
+        ...memorySectionStyles.button,
+        ...(variant === 'primary' ? memorySectionStyles.primaryButton : {}),
+        ...(variant === 'danger' ? memorySectionStyles.dangerButton : {}),
         ...style,
         ...(hovered && !disabled ? memoryButtonHoverStyles[variant] : {}),
         ...(pressed && !disabled ? memoryButtonPressedStyle : {}),
