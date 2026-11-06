@@ -177,7 +177,13 @@ export function apply(ctx: Context, config: Config = {}): void {
   let sessionWorker: SessionConsolidationWorker | undefined
   // Captured so the RPC handler can reach it: the agents service lives in an
   // inject callback, not in the handler's scope.
+  // Assigned by the agents inject block below, independently of whether a
+  // Session consolidation has ever run. Dream must not depend on that.
   let dreamAgents: DreamAgents | undefined
+  ctx.inject(['agents'], agentsCtx => {
+    dreamAgents = agentsCtx.agents as unknown as DreamAgents
+    return () => { dreamAgents = undefined }
+  })
   let sessionProjections: import('./host-contracts.ts').MemorySessionProjections | undefined
   let sessionProjectionCache: import('./host-contracts.ts').MemorySessionProjectionCache | undefined
   let llmCatalog: MemoryLlmCatalog | undefined
@@ -294,7 +300,6 @@ export function apply(ctx: Context, config: Config = {}): void {
       )
       const runner = new SessionConsolidationRunner(consolidator, worker, receipts, commits, replay, store, debug, candidatePool)
       sessionWorker = worker
-      dreamAgents = sessionCtx.agents as unknown as DreamAgents
       sessionRunner = runner
       return () => {
         if (sessionWorker === worker) sessionWorker = undefined
@@ -824,16 +829,15 @@ async function handleMemoryRpc(
           }
         }
 
-        const worker = getSessionWorker()
+        // Dream does not depend on the consolidation worker: requiring it here
+        // would mean Dream cannot run until a Session has been reviewed.
         const agents = dreamAgents
-        if (worker === undefined || agents === undefined) {
-          // Saying "started: false" without a reason the caller can act on would
-          // look like a successful no-op.
+        if (agents === undefined) {
           return {
             ok: false,
             error: {
               code: 'internal',
-              message: 'dream worker is not available yet; retry after the plugin finishes loading',
+              message: 'dream could not reach the agent service; retry after the plugin finishes loading',
               details: {},
             },
           }

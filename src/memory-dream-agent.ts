@@ -213,7 +213,17 @@ export async function runDreamWithAgent(options: DreamAgentRunOptions): Promise<
       content: [{ type: 'text', text: 'Submit the plan now by calling the tool.' }],
       source: { kind: 'plugin:dsh-memory' },
     }))
-    await handle.agent.whenIdle()
+    // A bare `await handle.agent.whenIdle()` never settles if the agent fails
+    // before reaching idle — the panel then shows a click that produced no
+    // feedback at all, which is indistinguishable from a dead button.
+    await waitForIdle(handle.agent, options.signal)
+    if (agentError !== undefined) {
+      throw new DreamAgentWorkerError(
+        'provider-failed',
+        agentError instanceof Error ? agentError.message : String(agentError),
+        { cause: agentError },
+      )
+    }
   } catch (cause: unknown) {
     if (agentError !== undefined) {
       throw new DreamAgentWorkerError(
@@ -247,4 +257,54 @@ function defineDreamTool(
     ...definition,
     handler: async (input: unknown) => submit(input),
   }
+}
+/** How long one Dream run may sit without reaching idle. */
+export const DREAM_IDLE_TIMEOUT_MS = 180_000
+
+/**
+ * Wait for the agent to go idle, with a ceiling.
+ *
+ * Mirrors the consolidation worker's interruptible wait. Without it a failed
+ * agent leaves the caller awaiting a promise that never settles, and the user
+ * sees a button that does nothing.
+ */
+export async function waitForIdle(
+  agent: { whenIdle(): Promise<void> },
+  signal: AbortSignal | undefined,
+  timeoutMs = DREAM_IDLE_TIMEOUT_MS,
+): Promise<void> {
+  const idle = agent.whenIdle()
+  // Swallow the idle rejection: it is reported through agentError instead, and
+  // an unhandled rejection here would crash the host process.
+  idle.catch(() => undefined)
+
+  await new Promise<void>((resolveWait, rejectWait) => {
+    let settled = false
+    const finish = (settle: () => void): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      settle()
+    }
+    const onAbort = (): void => {
+      finish(() => rejectWait(new DreamAgentWorkerError('timeout', 'dream run was aborted')))
+    }
+    const timer = setTimeout(() => {
+      finish(() => rejectWait(new DreamAgentWorkerError(
+        'timeout',
+        `dream worker did not reach idle within ${timeoutMs} ms`,
+      )))
+    }, timeoutMs)
+
+    if (signal?.aborted === true) {
+      onAbort()
+      return
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    idle.then(
+      () => { finish(() => resolveWait()) },
+      () => { finish(() => resolveWait()) },
+    )
+  })
 }

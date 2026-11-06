@@ -6,6 +6,7 @@ import {
   renderDreamPrompt,
   runDreamWithAgent,
   selectGlobalSections,
+  waitForIdle,
 } from '../src/memory-dream-agent.ts'
 import type { DreamProposalContext } from '../src/memory-dream-proposal.ts'
 
@@ -238,5 +239,31 @@ describe('Driving a Dream run through an agent', () => {
     await expect(runDreamWithAgent({ ...base, agents, validate: () => ({ accepted: true, message: 'ok' }) }))
       .rejects.toBeTruthy()
     expect(seen.disposed).toBe(1)
+  })
+})
+describe('Bounded idle wait', () => {
+  it('resolves when the agent goes idle', async () => {
+    await expect(waitForIdle({ whenIdle: async () => {} }, undefined, 1000)).resolves.toBeUndefined()
+  })
+
+  it('rejects on timeout instead of hanging forever', async () => {
+    // A bare await here is what made the panel show a click with no feedback:
+    // the request never settled, so no error was ever set.
+    await expect(waitForIdle({ whenIdle: () => new Promise<void>(() => {}) }, undefined, 50))
+      .rejects.toMatchObject({ code: 'timeout' })
+  })
+
+  it('rejects when the caller aborts', async () => {
+    const controller = new AbortController()
+    const pending = waitForIdle({ whenIdle: () => new Promise<void>(() => {}) }, controller.signal, 5000)
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ code: 'timeout' })
+  })
+
+  it('resolves when idle rejects, leaving the error to agentError', async () => {
+    // The rejection is surfaced through the agent error listener, not here; an
+    // unhandled rejection at this point would take down the host.
+    await expect(waitForIdle({ whenIdle: async () => { throw new Error('boom') } }, undefined, 1000))
+      .resolves.toBeUndefined()
   })
 })
