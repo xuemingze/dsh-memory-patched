@@ -1,21 +1,13 @@
-fix(dream): end the turn so the run settles instead of timing out
+fix(dream): keep Dream worker sessions out of the Session catalog
 
-Two clicks in a row hit the 180 s ceiling: "dream worker did not reach idle
-within 180000 ms". The agent never went idle because the tool never concluded a
-turn.
+A Dream run appeared in the Session list as "dream-mw4ggocx — consolidated",
+and the consolidation catalog offered it back as a conversation worth reviewing.
+The run is internal; it was never a conversation.
 
-The tool returned feedback and nothing else. A rejected plan meant the model got
-a correction prompt, tried again, got rejected again — the agent stayed busy the
-whole time, so whenIdle() could not resolve. The consolidation proposal tool
-calls exec.concludeTurn() for exactly this reason, and I had assumed the model
-would stop on its own. It does not.
+The catalog excludes internal sessions by id pattern, and that pattern only knew
+the consolidation worker prefix. Dream now creates its session as
+`session-memory-dream-<runId>` and the same check recognises it.
 
-The turn now concludes on acceptance, and also on the final permitted attempt:
-at that point the honest answer is "no plan", which the caller records as a
-rejection with the reason. A timeout carries none of that information.
-
-MAX attempts reuse DEFAULT_DREAM_MAX_ATTEMPTS so the tool and the worker agree on
-how many tries a run gets.
-
-Tests cover both branches: concluded ends the turn, not-concluded leaves it open
-for the correction round.
+This also explains the noise around the last two attempts: the worker session was
+eligible for consolidation while the run itself was still pending, so the panel
+showed unrelated consolidation activity for a Dream click.

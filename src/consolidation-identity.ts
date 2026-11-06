@@ -15,6 +15,21 @@ export function workerSessionIdOf(reviewId: string, attempt: number, segment?: n
 }
 
 /** Identify internal audit Sessions so they are never offered as source evidence. */
+/** Dream worker sessions carry this prefix so they can be told apart. */
+export const DREAM_WORKER_SESSION_PREFIX = 'session-memory-dream-'
+
+/** The Session id a Dream run creates. */
+export function dreamWorkerSessionIdOf(runId: string): string {
+  return `${DREAM_WORKER_SESSION_PREFIX}${runId}`
+}
+
+/**
+ * Identify internal audit Sessions so they are never offered as source evidence.
+ *
+ * Dream runs are internal too. Without this, a Dream worker session showed up in
+ * the Session list marked "consolidated", and the catalog offered it back as if
+ * it were a conversation worth reviewing.
+ */
 export function isConsolidationWorkerSessionId(sessionId: string): boolean {
-  return WORKER_SESSION_ID_PATTERN.test(sessionId)
+  return WORKER_SESSION_ID_PATTERN.test(sessionId) || sessionId.startsWith(DREAM_WORKER_SESSION_PREFIX)
 }

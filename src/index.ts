@@ -32,6 +32,7 @@ import {
   toApprovable,
 } from './memory-dream-approval.ts'
 import { parseGlobalSections } from './memory-global-guard.ts'
+import { dreamWorkerSessionIdOf } from './consolidation-identity.ts'
 import {
   DreamAgentWorkerError,
   runDreamWithAgent,
@@ -876,7 +877,9 @@ async function handleMemoryRpc(
           const run = await runDreamWithAgent({
             context: dreamContext,
             agents,
-            sessionId: runId,
+            // Prefix so the catalog can exclude it: a Dream run is internal,
+            // not a conversation to offer back for review.
+            sessionId: dreamWorkerSessionIdOf(runId),
             cwd: store.root,
             config: { provider: selection.provider, model: selection.model, maxTokens: DREAM_MAX_TOKENS, reasoningEffort: 'off' },
             validate: value => {
