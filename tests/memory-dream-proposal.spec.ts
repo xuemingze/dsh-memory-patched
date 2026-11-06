@@ -202,3 +202,28 @@ describe('Dream proposal envelopes', () => {
     expect(parseDreamProposal(input, context())).toEqual(parseDreamProposal(input, context()))
   })
 })
+
+describe('set-priority must actually change something', () => {
+  it('rejects a re-score that lands on the current value', () => {
+    // A plan that scores a record at its existing score is a no-op: the commit
+    // produces identical bytes, the revision does not move, and the user has
+    // spent a decision on nothing. Rejecting it feeds the reason back to the
+    // model instead of staging a plan that cannot do anything.
+    const context = {
+      scopeKey: 'scope-a',
+      claims: [{
+        name: 'alpha', scopeKey: 'scope-a', kind: 'configuration', volatility: 'stable',
+        lifecycle: 'active', importanceClass: 'working', importanceScore: 50,
+        text: 'summary', environmentFingerprint: '', evidenceCount: 1,
+        lastEvidenceAt: 1, lastVerifiedAt: null, lastUsedAt: null,
+        supersedes: [], sourcePlugins: [],
+      }],
+      globalSections: [],
+      now: 1,
+    }
+    expect(() => parseDreamProposal(
+      { actions: [{ action: 'set-priority', target: 'alpha', score: 50 }] },
+      context as never,
+    )).toThrow(/would not change/u)
+  })
+})

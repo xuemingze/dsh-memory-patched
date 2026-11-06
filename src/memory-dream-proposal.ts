@@ -302,10 +302,21 @@ function parsePriority(
   if (typeof record.score !== 'number' || !Number.isFinite(record.score)) {
     throw new DreamProposalError(`${label}.score must be a number`)
   }
+  const score = rescore(claim)
+  // A re-score that lands on the current value changes nothing. Accepting it
+  // produced a plan that was approved, committed, and left the store byte for
+  // byte identical — the user spent a decision on a no-op. Rejecting it feeds
+  // the reason back to the model, which can then propose something that matters
+  // or submit no change at all.
+  if (score === claim.importanceScore) {
+    throw new DreamProposalError(
+      `${label} would not change "${target}": it already scores ${score}`,
+    )
+  }
   return {
     action: 'set-priority',
     target,
-    score: rescore(claim),
+    score,
     ...rationaleOf(record, label),
   }
 }
